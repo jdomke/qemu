@@ -27,10 +27,12 @@ static GRWLock bbs_lock;
 static char *filename;
 static struct qemu_plugin_scoreboard *vcpus;
 static uint64_t interval = 100000000;
+static void vcpu_interval_exec(unsigned int vcpu_index, void *udata);
 
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
     for (int i = 0; i < qemu_plugin_num_vcpus(); i++) {
+        vcpu_interval_exec(i, NULL);
         fclose(((Vcpu *)qemu_plugin_scoreboard_find(vcpus, i))->file);
     }
 
