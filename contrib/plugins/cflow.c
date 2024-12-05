@@ -26,7 +26,7 @@ typedef enum {
 } ReportType;
 
 ReportType report = SORT_HOTTEST;
-int topn = 10;
+//int topn = 10;
 
 typedef struct {
     uint64_t daddr;
@@ -162,7 +162,7 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
     data = g_list_sort(data, sort);
 
     for (GList *l = data;
-         l != NULL && i < topn;
+         l != NULL;
          l = l->next, i++) {
         NodeData *n = l->data;
         const char *type = n->mid_count ? "sync fault" : "branch";
