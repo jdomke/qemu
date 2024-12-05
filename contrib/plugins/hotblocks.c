@@ -22,7 +22,7 @@ static bool do_inline;
 /* Plugins need to take care of their own locking */
 static GMutex lock;
 static GHashTable *hotblocks;
-static guint64 limit = 20;
+//static guint64 limit = 20;
 
 /*
  * Counting Structure
@@ -70,7 +70,7 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
     if (it) {
         g_string_append_printf(report, "pc, tcount, icount, ecount\n");
 
-        for (i = 0; i < limit && it->next; i++, it = it->next) {
+        for (i = 0; it->next; i++, it = it->next) {
             ExecCount *rec = (ExecCount *) it->data;
             g_string_append_printf(
                 report, "0x%016"PRIx64", %d, %ld, %"PRId64"\n",
