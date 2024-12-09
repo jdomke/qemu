@@ -15,8 +15,7 @@ cd -
 
 # Build guest application (e.g. stream)
 ```
-source ~/llvm-v19.1.4/init.sh
-clang -o stream ./misc/stream.c -fopenmp -DSTREAM_ARRAY_SIZE=1024 -DTUNED
+bash -c "source ~/llvm-v19.1.4/init.sh; clang -o stream ./misc/stream.c -fopenmp -DSTREAM_ARRAY_SIZE=1024 -DTUNED"
 ```
 
 # Exec bbv plugin to test functionality
