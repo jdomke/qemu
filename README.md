@@ -21,8 +21,8 @@ bash -c "source ~/llvm-v19.1.4/init.sh; clang -o stream ./misc/stream.c -fopenmp
 # Exec bbv plugin to test functionality
 ```
 ./build/qemu-aarch64 -E OMP_NUM_THREADS=12 -E LD_DEBUG=files \
-    -plugin 'contrib/plugins/libbbv.so,outfile=per_thread_bbinfo' -d plugin \
-    ./stream
+    -plugin 'build/contrib/plugins/libbbv.so,outfile=per_thread_bbinfo' \
+    -d plugin ./stream
 ```
 
 # old readme
