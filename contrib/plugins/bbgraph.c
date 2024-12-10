@@ -25,7 +25,6 @@ static GHashTable *bbs;
 static GRWLock bbs_lock;
 static char *filename;
 static struct qemu_plugin_scoreboard *vcpus;
-static uint64_t interval = 100000000;
 static void vcpu_interval_exec(unsigned int vcpu_index, void *udata);
 
 static void plugin_exit(qemu_plugin_id_t id, void *p)
@@ -75,8 +74,6 @@ static void vcpu_interval_exec(unsigned int vcpu_index, void *udata)
         return;
     }
 
-    vcpu->count -= interval;
-
     fputc('T', vcpu->file);
 
     g_rw_lock_reader_lock(&bbs_lock);
@@ -120,10 +117,6 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 
     qemu_plugin_register_vcpu_tb_exec_inline_per_vcpu(
         tb, QEMU_PLUGIN_INLINE_ADD_U64, bb_count_u64(bb), n_insns);
-
-    qemu_plugin_register_vcpu_tb_exec_cond_cb(
-        tb, vcpu_interval_exec, QEMU_PLUGIN_CB_NO_REGS,
-        QEMU_PLUGIN_COND_GE, count_u64(), interval, NULL);
 }
 
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
@@ -133,9 +126,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     for (int i = 0; i < argc; i++) {
         char *opt = argv[i];
         g_auto(GStrv) tokens = g_strsplit(opt, "=", 2);
-        if (g_strcmp0(tokens[0], "interval") == 0) {
-            interval = g_ascii_strtoull(tokens[1], NULL, 10);
-        } else if (g_strcmp0(tokens[0], "outfile") == 0) {
+        if (g_strcmp0(tokens[0], "outfile") == 0) {
             filename = tokens[1];
             tokens[1] = NULL;
         } else {
