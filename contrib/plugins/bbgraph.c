@@ -6,51 +6,50 @@
 
 #include <stdio.h>
 #include <glib.h>
+#include <assert.h>
 
-#include <qemu-plugin.h>
+#include "qemu-plugin.h"
 
-typedef struct Bb {
+typedef struct Bblock_t {
     uint64_t vaddr;
     struct qemu_plugin_scoreboard *count;
     unsigned int index;
-} Bb;
+} Bblock_t;
 
-typedef struct Vcpu {
-    uint64_t count;
+typedef struct Vcpu_t {
     FILE *file;
-} Vcpu;
+} Vcpu_t;
 
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
-static GHashTable *bbs;
-static GRWLock bbs_lock;
-static char *filename;
+static GHashTable *bblock_htable;
+static GRWLock bblock_htable_lock;
+static char *filename_prefix;
 static struct qemu_plugin_scoreboard *vcpus;
-static void vcpu_interval_exec(unsigned int vcpu_index, void *udata);
+
+static void plugin_exit(qemu_plugin_id_t id, void *p);
+static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index);
+static void vcpu_exit(unsigned int vcpu_index, void *udata);
+static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb);
+static void free_scoreboard_bb_data(void *data);
+static qemu_plugin_u64 bb_count_u64(Bblock_t *bb);
 
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
-    for (int i = 0; i < qemu_plugin_num_vcpus(); i++) {
-        vcpu_interval_exec(i, NULL);
-        fclose(((Vcpu *)qemu_plugin_scoreboard_find(vcpus, i))->file);
-    }
+    for (int i = 0; i < qemu_plugin_num_vcpus(); i++)
+        vcpu_exit(i, NULL);
 
-    g_hash_table_unref(bbs);
-    g_free(filename);
+    g_hash_table_unref(bblock_htable);
+    g_free(filename_prefix);
     qemu_plugin_scoreboard_free(vcpus);
 }
 
-static void free_bb(void *data)
+static void free_scoreboard_bb_data(void *data)
 {
-    qemu_plugin_scoreboard_free(((Bb *)data)->count);
+    qemu_plugin_scoreboard_free(((Bblock_t *)data)->count);
     g_free(data);
 }
 
-static qemu_plugin_u64 count_u64(void)
-{
-    return qemu_plugin_scoreboard_u64_in_struct(vcpus, Vcpu, count);
-}
-
-static qemu_plugin_u64 bb_count_u64(Bb *bb)
+static qemu_plugin_u64 bb_count_u64(Bblock_t *bb)
 {
     return qemu_plugin_scoreboard_u64(bb->count);
 }
@@ -58,15 +57,17 @@ static qemu_plugin_u64 bb_count_u64(Bb *bb)
 static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index)
 {
     g_autofree gchar *vcpu_filename = NULL;
-    Vcpu *vcpu = qemu_plugin_scoreboard_find(vcpus, vcpu_index);
 
-    vcpu_filename = g_strdup_printf("%s.%u.bb", filename, vcpu_index);
+    vcpu_filename = g_strdup_printf("%s.%u.bb", filename_prefix, vcpu_index);
+    Vcpu_t *vcpu = qemu_plugin_scoreboard_find(vcpus, vcpu_index);
     vcpu->file = fopen(vcpu_filename, "w");
+
+    assert(vcpu->file);
 }
 
-static void vcpu_interval_exec(unsigned int vcpu_index, void *udata)
+static void vcpu_exit(unsigned int vcpu_index, void *udata)
 {
-    Vcpu *vcpu = qemu_plugin_scoreboard_find(vcpus, vcpu_index);
+    Vcpu_t *vcpu = qemu_plugin_scoreboard_find(vcpus, vcpu_index);
     GHashTableIter iter;
     void *value;
 
@@ -76,11 +77,11 @@ static void vcpu_interval_exec(unsigned int vcpu_index, void *udata)
 
     fputc('T', vcpu->file);
 
-    g_rw_lock_reader_lock(&bbs_lock);
-    g_hash_table_iter_init(&iter, bbs);
+    g_rw_lock_reader_lock(&bblock_htable_lock);
+    g_hash_table_iter_init(&iter, bblock_htable);
 
     while (g_hash_table_iter_next(&iter, NULL, &value)) {
-        Bb *bb = value;
+        Bblock_t *bb = value;
         uint64_t bb_count = qemu_plugin_u64_get(bb_count_u64(bb), vcpu_index);
 
         if (!bb_count) {
@@ -91,29 +92,28 @@ static void vcpu_interval_exec(unsigned int vcpu_index, void *udata)
         qemu_plugin_u64_set(bb_count_u64(bb), vcpu_index, 0);
     }
 
-    g_rw_lock_reader_unlock(&bbs_lock);
+    g_rw_lock_reader_unlock(&bblock_htable_lock);
     fputc('\n', vcpu->file);
+
+    fclose(vcpu->file);
 }
 
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 {
     uint64_t n_insns = qemu_plugin_tb_n_insns(tb);
     uint64_t vaddr = qemu_plugin_tb_vaddr(tb);
-    Bb *bb;
+    Bblock_t *bb;
 
-    g_rw_lock_writer_lock(&bbs_lock);
-    bb = g_hash_table_lookup(bbs, &vaddr);
+    g_rw_lock_writer_lock(&bblock_htable_lock);
+    bb = g_hash_table_lookup(bblock_htable, &vaddr);
     if (!bb) {
-        bb = g_new(Bb, 1);
+        bb = g_new(Bblock_t, 1);
         bb->vaddr = vaddr;
         bb->count = qemu_plugin_scoreboard_new(sizeof(uint64_t));
-        bb->index = g_hash_table_size(bbs);
-        g_hash_table_replace(bbs, &bb->vaddr, bb);
+        bb->index = g_hash_table_size(bblock_htable);
+        g_hash_table_replace(bblock_htable, &bb->vaddr, bb);
     }
-    g_rw_lock_writer_unlock(&bbs_lock);
-
-    qemu_plugin_register_vcpu_tb_exec_inline_per_vcpu(
-        tb, QEMU_PLUGIN_INLINE_ADD_U64, count_u64(), n_insns);
+    g_rw_lock_writer_unlock(&bblock_htable_lock);
 
     qemu_plugin_register_vcpu_tb_exec_inline_per_vcpu(
         tb, QEMU_PLUGIN_INLINE_ADD_U64, bb_count_u64(bb), n_insns);
@@ -127,21 +127,22 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
         char *opt = argv[i];
         g_auto(GStrv) tokens = g_strsplit(opt, "=", 2);
         if (g_strcmp0(tokens[0], "outfile") == 0) {
-            filename = tokens[1];
+            filename_prefix = tokens[1];
             tokens[1] = NULL;
         } else {
-            fprintf(stderr, "option parsing failed: %s\n", opt);
+            fprintf(stderr, "ERR: option parsing failed: %s\n", opt);
             return -1;
         }
     }
 
-    if (!filename) {
-        fputs("outfile unspecified\n", stderr);
+    if (!filename_prefix) {
+        fputs("ERR: outfile unspecified\n", stderr);
         return -1;
     }
 
-    bbs = g_hash_table_new_full(g_int64_hash, g_int64_equal, NULL, free_bb);
-    vcpus = qemu_plugin_scoreboard_new(sizeof(Vcpu));
+    bblock_htable = g_hash_table_new_full(g_int64_hash, g_int64_equal, NULL,
+                                          free_scoreboard_bb_data);
+    vcpus = qemu_plugin_scoreboard_new(sizeof(Vcpu_t));
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
     qemu_plugin_register_vcpu_init_cb(id, vcpu_init);
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
