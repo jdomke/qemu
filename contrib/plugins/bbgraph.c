@@ -29,33 +29,13 @@ static GRWLock bblock_htable_lock;
 static char *out_prefix;
 static struct qemu_plugin_scoreboard *vcpus;
 
+static void virtaddrspace_mapping_to_json(json_object *vaddr_map);
 static void plugin_exit(qemu_plugin_id_t id, void *p);
 static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index);
 static void vcpu_exit(unsigned int vcpu_index, void *udata);
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb);
 static void free_scoreboard_bb_data(void *data);
 static qemu_plugin_u64 bb_count_u64(Bblock_t *bb);
-
-static void plugin_exit(qemu_plugin_id_t id, void *p)
-{
-    for (int i = 0; i < qemu_plugin_num_vcpus(); i++)
-        vcpu_exit(i, NULL);
-
-    g_hash_table_unref(bblock_htable);
-    g_free(out_prefix);
-    qemu_plugin_scoreboard_free(vcpus);
-}
-
-static void free_scoreboard_bb_data(void *data)
-{
-    qemu_plugin_scoreboard_free(((Bblock_t *)data)->count);
-    g_free(data);
-}
-
-static qemu_plugin_u64 bb_count_u64(Bblock_t *bb)
-{
-    return qemu_plugin_scoreboard_u64(bb->count);
-}
 
 static void virtaddrspace_mapping_to_json(json_object *vaddr_map) {
     FILE *file = fopen("/proc/self/maps", "r");
@@ -106,24 +86,10 @@ static void virtaddrspace_mapping_to_json(json_object *vaddr_map) {
     }
 }
 
-static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index)
+static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
-//    Vcpu_t *vcpu = qemu_plugin_scoreboard_find(vcpus, vcpu_index);
-}
-
-static void vcpu_exit(unsigned int vcpu_index, void *udata)
-{
-    //Vcpu_t *vcpu = qemu_plugin_scoreboard_find(vcpus, vcpu_index);
-    GHashTableIter iter;
-    void *value;
-
     g_autofree gchar *json_out_file = g_strdup_printf("%s.json", out_prefix);
-    FILE *json_out_fd = NULL;
-    if (!vcpu_index)
-        json_out_fd = fopen(json_out_file, "w");
-    else
-        json_out_fd = fopen(json_out_file, "a");
-
+    FILE *json_out_fd = fopen(json_out_file, "w");
     if (!json_out_fd)
         return;
 
@@ -138,10 +104,44 @@ static void vcpu_exit(unsigned int vcpu_index, void *udata)
 
     // Convert the JSON object to a string
     const char *json_str = json_object_to_json_string_ext(bbgraph_json,
-	                                                  (JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY));
-
+                                                          (JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY));
     // Write the JSON string to the file
     fprintf(json_out_fd, "%s\n", json_str);
+
+    for (int i = 0; i < qemu_plugin_num_vcpus(); i++)
+        vcpu_exit(i, NULL);
+
+    g_hash_table_unref(bblock_htable);
+    g_free(out_prefix);
+    qemu_plugin_scoreboard_free(vcpus);
+
+    // Free the JSON object memory
+    json_object_put(bbgraph_json);
+
+    fclose(json_out_fd);
+}
+
+static void free_scoreboard_bb_data(void *data)
+{
+    qemu_plugin_scoreboard_free(((Bblock_t *)data)->count);
+    g_free(data);
+}
+
+static qemu_plugin_u64 bb_count_u64(Bblock_t *bb)
+{
+    return qemu_plugin_scoreboard_u64(bb->count);
+}
+
+static void vcpu_init(qemu_plugin_id_t id, unsigned int vcpu_index)
+{
+//    Vcpu_t *vcpu = qemu_plugin_scoreboard_find(vcpus, vcpu_index);
+}
+
+static void vcpu_exit(unsigned int vcpu_index, void *udata)
+{
+    //Vcpu_t *vcpu = qemu_plugin_scoreboard_find(vcpus, vcpu_index);
+    GHashTableIter iter;
+    void *value;
 
     g_rw_lock_reader_lock(&bblock_htable_lock);
     g_hash_table_iter_init(&iter, bblock_htable);
@@ -154,17 +154,11 @@ static void vcpu_exit(unsigned int vcpu_index, void *udata)
             continue;
         }
 
-        fprintf(json_out_fd, ":%u:%" PRIu64 " ", bb->index, bb_count);
+        fprintf(stderr, ":%u:%" PRIu64 " ", bb->index, bb_count);
         qemu_plugin_u64_set(bb_count_u64(bb), vcpu_index, 0);
     }
 
     g_rw_lock_reader_unlock(&bblock_htable_lock);
-    fputc('\n', json_out_fd);
-
-    fclose(json_out_fd);
-
-    // Free the JSON object memory
-    json_object_put(bbgraph_json);
 }
 
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
