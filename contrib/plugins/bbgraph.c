@@ -21,8 +21,10 @@ typedef struct Vcpu_t {
 } Vcpu_t;
 
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
+
 static GHashTable *bblock_htable;
 static GRWLock bblock_htable_lock;
+
 static char *filename_prefix;
 static struct qemu_plugin_scoreboard *vcpus;
 
@@ -108,6 +110,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     bb = g_hash_table_lookup(bblock_htable, &vaddr);
     if (!bb) {
         bb = g_new(Bblock_t, 1);
+        assert(bb);
         bb->vaddr = vaddr;
         bb->count = qemu_plugin_scoreboard_new(sizeof(uint64_t));
         bb->index = g_hash_table_size(bblock_htable);

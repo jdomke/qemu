@@ -25,5 +25,12 @@ bash -c "source ~/llvm-v19.1.4/init.sh; clang -o stream ./misc/stream.c -fopenmp
     -d plugin ./stream
 ```
 
+# Newly developed bbgraph plugin (based on bbv and cflow features)
+```
+./build/qemu-aarch64 -E OMP_NUM_THREADS=12 -E LD_DEBUG=files \
+    -plugin 'build/contrib/plugins/libbbgraph.so,outfile=per_thread_bbgraph' \
+    -d plugin ./stream
+```
+
 # old readme
 [here](README_org.rst)
