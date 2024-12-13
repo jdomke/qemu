@@ -9,6 +9,7 @@
 #include <assert.h>
 
 #include "qemu-plugin.h"
+#include "json.h"
 
 typedef struct Bblock_t {
     uint64_t vaddr;
@@ -72,6 +73,7 @@ static void vcpu_exit(unsigned int vcpu_index, void *udata)
     Vcpu_t *vcpu = qemu_plugin_scoreboard_find(vcpus, vcpu_index);
     GHashTableIter iter;
     void *value;
+    json_object *new_obj = malloc(1);
 
     if (!vcpu->file) {
         return;
@@ -98,6 +100,7 @@ static void vcpu_exit(unsigned int vcpu_index, void *udata)
     fputc('\n', vcpu->file);
 
     fclose(vcpu->file);
+    free(new_obj);
 }
 
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
