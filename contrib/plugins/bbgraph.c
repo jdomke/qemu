@@ -12,9 +12,12 @@
 #include "json.h"
 
 typedef struct Bblock_t {
-    uint64_t vaddr;
-    struct qemu_plugin_scoreboard *count;
-    unsigned int table_idx;
+    uint64_t table_idx;                    // NODE_ID
+    uint64_t vaddr;                        // ADDR_OFFSET (use absolute)
+    uint32_t size;                         // SIZE of the block in bytes
+    uint32_t n_ins;                        // NUM_INSTRS n this block
+    uint64_t vaddr_last_instr;             // LAST_INSTR_OFFSET
+    struct qemu_plugin_scoreboard *count;  // COUNT of times this was executed
 } Bblock_t;
 
 typedef struct Vcpu_t {
@@ -34,9 +37,9 @@ static void edge_types_mapping_to_json(json_object *);
 static void special_nodes_mapping_to_json(json_object *);
 static void symbol_data_mapping_to_json(uint64_t, json_object *);
 static void source_data_mapping_to_json(uint64_t, json_object *);
-static void basic_blocks_mapping_to_json(uint64_t, json_object *);
+static void basic_blocks_mapping_to_json(uint64_t, uint64_t, uint64_t, json_object *);
 static void routines_mapping_to_json(uint64_t, json_object *);
-static void image_data_mapping_to_json(uint64_t, json_object *);
+static void image_data_mapping_to_json(uint64_t, uint64_t, uint64_t, json_object *);
 static void images_mapping_to_json(pid_t, json_object *);
 static void edges_mapping_to_json(json_object *);
 static void process_data_mapping_to_json(pid_t, json_object *);
@@ -81,7 +84,7 @@ static void file_names_mapping_to_json(json_object *file_names)
         // parse the line for start, end, permissions, offset, etc.
         if (sscanf(line, "%lx-%lx %4s %8s %5s %10s %255s",
                    &start, &end, perms, offset, dev, inode, filepath) >= 6) {
-	    fprintf(stderr, "%s\n", line);
+            //fprintf(stderr, "%s\n", line);
             if (perms[0] == 'r' && perms[1] != 'w'
                 && 0 < atol(inode) && priv_inode != atol(inode)) {
                 //fprintf(stderr,
@@ -186,6 +189,8 @@ static void source_data_mapping_to_json(uint64_t inode,
 }
 
 static void basic_blocks_mapping_to_json(uint64_t inode,
+                                         uint64_t vaddr_start,
+                                         uint64_t vaddr_end,
                                          json_object *basic_blocks)
 {
     assert(json_object_is_type(basic_blocks, json_type_array));
@@ -205,6 +210,33 @@ static void basic_blocks_mapping_to_json(uint64_t inode,
     json_object_array_add(b_obj, json_object_new_string("LAST_INSTR_OFFSET"));
     json_object_array_add(b_obj, json_object_new_string("COUNT"));
     json_object_array_add(basic_blocks, b_obj);
+
+    g_rw_lock_reader_lock(&bblock_htable_lock);
+
+    GHashTableIter iter;
+    Bblock_t *bb = NULL;
+    char bb_addr[32];
+    uint64_t total_exec = 0;
+
+    g_hash_table_iter_init(&iter, bblock_htable);
+    while (g_hash_table_iter_next(&iter, NULL, (gpointer*)&bb)) {
+        if (bb->vaddr < vaddr_start || bb->vaddr > vaddr_end)
+            continue;
+
+        b_obj = json_object_new_array_ext(6);
+        json_object_array_add(b_obj, json_object_new_uint64(bb->table_idx));
+        snprintf(bb_addr, sizeof(bb_addr), "0x%"PRIx64, bb->vaddr - vaddr_start);
+        json_object_array_add(b_obj, json_object_new_string(bb_addr));
+        json_object_array_add(b_obj, json_object_new_uint64(bb->size));
+        json_object_array_add(b_obj, json_object_new_uint64(bb->n_ins));
+        json_object_array_add(b_obj, json_object_new_uint64(bb->vaddr_last_instr));
+        total_exec = 0;
+        for (int vcpu_idx = 0; vcpu_idx < qemu_plugin_num_vcpus(); vcpu_idx++)
+            total_exec += qemu_plugin_u64_get(qemu_plugin_scoreboard_u64(bb->count), vcpu_idx);
+        json_object_array_add(b_obj, json_object_new_uint64(total_exec));
+        json_object_array_add(basic_blocks, b_obj);
+    }
+    g_rw_lock_reader_unlock(&bblock_htable_lock);
 }
 
 static void routines_mapping_to_json(uint64_t inode, json_object *routines)
@@ -236,7 +268,10 @@ static void routines_mapping_to_json(uint64_t inode, json_object *routines)
     json_object_array_add(routines, r_obj);
 }
 
-static void image_data_mapping_to_json(uint64_t inode, json_object *image_data)
+static void image_data_mapping_to_json(uint64_t inode,
+                                       uint64_t vaddr_start,
+                                       uint64_t vaddr_end,
+                                       json_object *image_data)
 {
     assert(json_object_is_type(image_data, json_type_object));
 
@@ -260,7 +295,7 @@ static void image_data_mapping_to_json(uint64_t inode, json_object *image_data)
     json_object_object_add(image_data, "SOURCE_DATA", source_data);
 
     json_object *basic_blocks = json_object_new_array();
-    basic_blocks_mapping_to_json(inode, basic_blocks);
+    basic_blocks_mapping_to_json(inode, vaddr_start, vaddr_end, basic_blocks);
     json_object_object_add(image_data, "BASIC_BLOCKS", basic_blocks);
 
     json_object *routines = json_object_new_array();
@@ -315,7 +350,7 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
                 json_object_array_add(im_obj, json_object_new_uint64(end-start));
 
                 im_data_obj = json_object_new_object();
-                image_data_mapping_to_json(atol(inode), im_data_obj);
+                image_data_mapping_to_json(atol(inode), start, end, im_data_obj);
                 json_object_array_add(im_obj, im_data_obj);
 
                 json_object_array_add(images, im_obj);
@@ -370,9 +405,9 @@ static void process_data_mapping_to_json(pid_t pid, json_object *process_data)
     json_object *ins_obj = json_object_new_array_ext(qemu_plugin_num_vcpus());
 
     for (int vcpu_idx = 0; vcpu_idx < qemu_plugin_num_vcpus(); vcpu_idx++) {
-         thread_n_ins = qemu_plugin_u64_get(qemu_plugin_scoreboard_u64(vcpu_n_ins), vcpu_idx);
-	 json_object_array_add(ins_obj, json_object_new_uint64(thread_n_ins));
-	 total_n_ins += thread_n_ins;
+        thread_n_ins = qemu_plugin_u64_get(qemu_plugin_scoreboard_u64(vcpu_n_ins), vcpu_idx);
+        json_object_array_add(ins_obj, json_object_new_uint64(thread_n_ins));
+        total_n_ins += thread_n_ins;
     }
     json_object_object_add(process_data,
                            "INSTR_COUNT", json_object_new_uint64(total_n_ins));
@@ -507,7 +542,7 @@ static void vcpu_exit(unsigned int vcpu_index, void *udata)
             continue;
         }
 
-        fprintf(stderr, ":%u:%" PRIu64 " ", bb->table_idx, bb_count);
+        fprintf(stderr, ":%lu:%" PRIu64 " ", bb->table_idx, bb_count);
         qemu_plugin_u64_set(bb_count_u64(bb), vcpu_index, 0);
     }
 
@@ -521,22 +556,26 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     uint64_t bb_n_insns = qemu_plugin_tb_n_insns(tb);
     uint64_t bb_id = bb_pc ^ bb_n_insns;
 
+    qemu_plugin_register_vcpu_tb_exec_inline_per_vcpu(
+        tb, QEMU_PLUGIN_INLINE_ADD_U64, qemu_plugin_scoreboard_u64(vcpu_n_ins), bb_n_insns);
+
     g_rw_lock_writer_lock(&bblock_htable_lock);
     bb = g_hash_table_lookup(bblock_htable, (gconstpointer)bb_id);
     if (!bb) {
         bb = g_new(Bblock_t, 1);
         assert(bb);
-        bb->vaddr = bb_pc;
-        bb->count = qemu_plugin_scoreboard_new(sizeof(uint64_t));               // set to 0 internally
         bb->table_idx = g_hash_table_size(bblock_htable);
+        bb->vaddr = bb_pc;
+        bb->size = 0;             //FIXME: not sure if we can get that
+        bb->n_ins = bb_n_insns;
+        bb->vaddr_last_instr = 0; //FIXME: not sure if we can get that either
+        bb->count = qemu_plugin_scoreboard_new(sizeof(uint64_t));               // set to 0 internally
         g_hash_table_replace(bblock_htable, (gpointer)bb_id, bb);
     }
     g_rw_lock_writer_unlock(&bblock_htable_lock);
 
     qemu_plugin_register_vcpu_tb_exec_inline_per_vcpu(
-        tb, QEMU_PLUGIN_INLINE_ADD_U64, qemu_plugin_scoreboard_u64(vcpu_n_ins), bb_n_insns);
-    qemu_plugin_register_vcpu_tb_exec_inline_per_vcpu(
-        tb, QEMU_PLUGIN_INLINE_ADD_U64, bb_count_u64(bb), bb_n_insns);
+        tb, QEMU_PLUGIN_INLINE_ADD_U64, qemu_plugin_scoreboard_u64(bb->count), 1);
 }
 
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
