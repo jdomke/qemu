@@ -14,7 +14,7 @@
 typedef struct Bblock_t {
     uint64_t vaddr;
     struct qemu_plugin_scoreboard *count;
-    unsigned int index;
+    unsigned int table_idx;
 } Bblock_t;
 
 typedef struct Vcpu_t {
@@ -27,9 +27,11 @@ static GHashTable *bblock_htable;
 static GRWLock bblock_htable_lock;
 
 static char *out_prefix;
-static struct qemu_plugin_scoreboard *vcpus;
+static struct qemu_plugin_scoreboard *vcpu_n_ins;
 
 static void file_names_mapping_to_json(json_object *);
+static void edge_types_mapping_to_json(json_object *);
+static void special_nodes_mapping_to_json(json_object *);
 static void symbol_data_mapping_to_json(uint64_t, json_object *);
 static void source_data_mapping_to_json(uint64_t, json_object *);
 static void basic_blocks_mapping_to_json(uint64_t, json_object *);
@@ -53,13 +55,13 @@ static void file_names_mapping_to_json(json_object *file_names)
 
     /* Example:
      * "FILE_NAMES" :
-     *   [ [ "FILE_NAME_ID", "FILE_NAME" ],                                     // use inode as ID
-     *     [ 2, “\/usr\/joe\/src\/misc\/hello-world" ],
-     *     [ 5, "\/lib64\/libgcc_s.so" ],
-     *     [ 4, “\/usr\/joe\/src\/misc\/hello-world.c" ],
-     *   ]
+     *  [ [ "FILE_NAME_ID", "FILE_NAME" ],                                     // use inode as ID
+     *    [ 2, “\/usr\/joe\/src\/misc\/hello-world" ],
+     *    [ 5, "\/lib64\/libgcc_s.so" ],
+     *    [ 4, “\/usr\/joe\/src\/misc\/hello-world.c" ],
+     *  ]
      */
-    json_object *fn_obj = json_object_new_array();
+    json_object *fn_obj = json_object_new_array_ext(2);
     json_object_array_add(fn_obj, json_object_new_string("FILE_NAME_ID"));
     json_object_array_add(fn_obj, json_object_new_string("FILE_NAME"));
     json_object_array_add(file_names, fn_obj);
@@ -87,7 +89,7 @@ static void file_names_mapping_to_json(json_object *file_names)
                 //        start, end, perms, filepath);
 
                 // Create a new JSON object for this mapping
-                fn_obj = json_object_new_array();
+                fn_obj = json_object_new_array_ext(2);
                 // Add key-value pairs to the JSON object
                 json_object_array_add(fn_obj, json_object_new_uint64((priv_inode = atol(inode))));
                 json_object_array_add(fn_obj, json_object_new_string(filepath));
@@ -99,36 +101,82 @@ static void file_names_mapping_to_json(json_object *file_names)
     fclose(pidmap_file);
 }
 
-static void symbol_data_mapping_to_json(uint64_t inode, json_object *symbol_data)
+static void edge_types_mapping_to_json(json_object *edge_types)
+{
+    assert(json_object_is_type(edge_types, json_type_array));
+
+    /* Example:
+     * "EDGE_TYPES" :
+     *  [ [ "EDGE_TYPE_ID", "EDGE_TYPE" ],
+     *    [ 1, "ENTRY" ],
+     *    ...
+     *    [ 27, "UNKNOWN" ]
+     *  ]
+     */
+    json_object *e_obj = json_object_new_array_ext(2);
+    json_object_array_add(e_obj, json_object_new_string("EDGE_TYPE_ID"));
+    json_object_array_add(e_obj, json_object_new_string("EDGE_TYPE"));
+    json_object_array_add(edge_types, e_obj);
+    e_obj = json_object_new_array_ext(2);
+    json_object_array_add(e_obj, json_object_new_uint64(27));
+    json_object_array_add(e_obj, json_object_new_string("UNKNOWN"));
+    json_object_array_add(edge_types, e_obj);
+}
+
+static void special_nodes_mapping_to_json(json_object *special_nodes)
+{
+    assert(json_object_is_type(special_nodes, json_type_array));
+
+    /* Example:
+     * "SPECIAL_NODES" :
+     *  [ [ "NODE_ID", "NODE_NAME" ],
+     *    [ 1, "START" ],
+     *    [ 2, "END" ],
+     *    [ 3, "UNKNOWN" ]
+     *  ]
+     */
+    json_object *s_obj = json_object_new_array_ext(2);
+    json_object_array_add(s_obj, json_object_new_string("NODE_ID"));
+    json_object_array_add(s_obj, json_object_new_string("NODE_NAME"));
+    json_object_array_add(special_nodes, s_obj);
+    s_obj = json_object_new_array_ext(2);
+    json_object_array_add(s_obj, json_object_new_uint64(3));
+    json_object_array_add(s_obj, json_object_new_string("UNKNOWN"));
+    json_object_array_add(special_nodes, s_obj);
+}
+
+static void symbol_data_mapping_to_json(uint64_t inode,
+                                        json_object *symbol_data)
 {
     assert(json_object_is_type(symbol_data, json_type_array));
 
     /* Example:
-     * [ [ "NAME", "ADDR_OFFSET", "SIZE " ],
-     *   [ "free", "0x127f0", 60 ],
-     *   [ "malloc", "0x12940", 13 ],
-     *   [ "calloc", "0x12a00", 9 ]
-     * ]
+     *  [ [ "NAME", "ADDR_OFFSET", "SIZE " ],
+     *    [ "free", "0x127f0", 60 ],
+     *    [ "malloc", "0x12940", 13 ],
+     *    [ "calloc", "0x12a00", 9 ]
+     *  ]
      */
-    json_object *s_obj = json_object_new_array();
+    json_object *s_obj = json_object_new_array_ext(3);
     json_object_array_add(s_obj, json_object_new_string("NAME"));
     json_object_array_add(s_obj, json_object_new_string("ADDR_OFFSET"));
     json_object_array_add(s_obj, json_object_new_string("SIZE"));
     json_object_array_add(symbol_data, s_obj);
 }
 
-static void source_data_mapping_to_json(uint64_t inode, json_object *source_data)
+static void source_data_mapping_to_json(uint64_t inode,
+                                        json_object *source_data)
 {
     assert(json_object_is_type(source_data, json_type_array));
 
     /* Example:
-     * [ [ "FILE_NAME_ID", "LINE_NUM", "ADDR_OFFSET", "SIZE", "NUM_INSTRS" ],
-     *   [ 8, 25, "0x7a8", 4, 1 ],
-     *   [ 8, 26, "0x7ac", 5, 1 ],
-     *   [ 9, 9, "0x7bb", 4, 1 ],
-     * ]
+     *  [ [ "FILE_NAME_ID", "LINE_NUM", "ADDR_OFFSET", "SIZE", "NUM_INSTRS" ],
+     *    [ 8, 25, "0x7a8", 4, 1 ],
+     *    [ 8, 26, "0x7ac", 5, 1 ],
+     *    [ 9, 9, "0x7bb", 4, 1 ],
+     *  ]
      */
-    json_object *s_obj = json_object_new_array();
+    json_object *s_obj = json_object_new_array_ext(5);
     json_object_array_add(s_obj, json_object_new_string("FILE_NAME_ID"));
     json_object_array_add(s_obj, json_object_new_string("LINE_NUM"));
     json_object_array_add(s_obj, json_object_new_string("ADDR_OFFSET"));
@@ -137,18 +185,19 @@ static void source_data_mapping_to_json(uint64_t inode, json_object *source_data
     json_object_array_add(source_data, s_obj);
 }
 
-static void basic_blocks_mapping_to_json(uint64_t inode, json_object *basic_blocks)
+static void basic_blocks_mapping_to_json(uint64_t inode,
+                                         json_object *basic_blocks)
 {
     assert(json_object_is_type(basic_blocks, json_type_array));
 
     /* Example:
-     * [ [ "NODE_ID", "ADDR_OFFSET", "SIZE", "NUM_INSTRS", "LAST_INSTR_OFFSET", "COUNT" ],
-     *   [ 4, "0x7a8", 9, 2, 4, 1 ],
-     *   [ 5, "0x7b1", 5, 1, 0, 9 ],
-     *   [ 6, "0x7b6", 5, 1, 0, 8 ],
-     * ]
+     *  [ [ "NODE_ID", "ADDR_OFFSET", "SIZE", "NUM_INSTRS", "LAST_INSTR_OFFSET", "COUNT" ],
+     *    [ 4, "0x7a8", 9, 2, 4, 1 ],
+     *    [ 5, "0x7b1", 5, 1, 0, 9 ],
+     *    [ 6, "0x7b6", 5, 1, 0, 8 ],
+     *  ]
      */
-    json_object *b_obj = json_object_new_array();
+    json_object *b_obj = json_object_new_array_ext(6);
     json_object_array_add(b_obj, json_object_new_string("NODE_ID"));
     json_object_array_add(b_obj, json_object_new_string("ADDR_OFFSET"));
     json_object_array_add(b_obj, json_object_new_string("SIZE"));
@@ -163,23 +212,23 @@ static void routines_mapping_to_json(uint64_t inode, json_object *routines)
     assert(json_object_is_type(routines, json_type_array));
 
     /* Example:
-     * [ [ "ENTRY_NODE_ID", "EXIT_NODE_IDS", "NODES", "LOOPS" ],
-     *   [ 4, [ 4, 5, 6, 7 ],
-     *     [ [ "NODE_ID", "IDOM_NODE_ID" ],
-     *       [ 4, 4 ],
-     *       [ 5, 4 ],
-     *       [ 6, 5 ],
-     *       [ 7, 6 ] ] ],
-     *       [ 63, [ 65, 67 ],
-     *     [ [ "NODE_ID", "IDOM_NODE_ID" ],
-     *       [ 66, 65 ],
-     *       [ 67, 63 ],
-     *       [ 63, 63 ],
-     *       [ 64, 63 ],
-     *       [ 65, 64 ] ], [...]
-     * ]
+     *  [ [ "ENTRY_NODE_ID", "EXIT_NODE_IDS", "NODES", "LOOPS" ],
+     *    [ 4, [ 4, 5, 6, 7 ],
+     *      [ [ "NODE_ID", "IDOM_NODE_ID" ],
+     *        [ 4, 4 ],
+     *        [ 5, 4 ],
+     *        [ 6, 5 ],
+     *        [ 7, 6 ] ] ],
+     *        [ 63, [ 65, 67 ],
+     *      [ [ "NODE_ID", "IDOM_NODE_ID" ],
+     *        [ 66, 65 ],
+     *        [ 67, 63 ],
+     *        [ 63, 63 ],
+     *        [ 64, 63 ],
+     *        [ 65, 64 ] ], [...]
+     *  ]
      */
-    json_object *r_obj = json_object_new_array();
+    json_object *r_obj = json_object_new_array_ext(4);
     json_object_array_add(r_obj, json_object_new_string("ENTRY_NODE_ID"));
     json_object_array_add(r_obj, json_object_new_string("EXIT_NODE_IDS"));
     json_object_array_add(r_obj, json_object_new_string("NODES"));
@@ -192,12 +241,12 @@ static void image_data_mapping_to_json(uint64_t inode, json_object *image_data)
     assert(json_object_is_type(image_data, json_type_object));
 
     /* Example:
-     * { "FILE_NAME_ID" : 4,
-     *   "SYMBOLS" : [...],
-     *   "SOURCE_DATA" : [...],
-     *   "BASIC_BLOCKS" : [...],
-     *   "ROUTINES" : [...]
-     * }
+     *  { "FILE_NAME_ID" : 4,
+     *    "SYMBOLS" : [...],
+     *    "SOURCE_DATA" : [...],
+     *    "BASIC_BLOCKS" : [...],
+     *    "ROUTINES" : [...]
+     *  }
      */
     json_object_object_add(image_data,
                            "FILE_NAME_ID", json_object_new_uint64(inode));
@@ -224,17 +273,17 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
     assert(json_object_is_type(images, json_type_array));
 
     /* Example:
-     * [ [ "IMAGE_ID", "LOAD_ADDR", "SIZE", "IMAGE_DATA" ],                     // use inode as ID
-     *   [ 1, "0x400000", 2102216, {...} ],
-     *   [ 2, "0x2aaaaaaab000", 1166728, {...} ]
-     * ]
+     *  [ [ "IMAGE_ID", "LOAD_ADDR", "SIZE", "IMAGE_DATA" ],                     // use inode as ID
+     *    [ 1, "0x400000", 2102216, {...} ],
+     *    [ 2, "0x2aaaaaaab000", 1166728, {...} ]
+     *  ]
      */
     char pidmap_filename[128], load_addr[32];
     snprintf(pidmap_filename, sizeof(pidmap_filename), "/proc/%d/maps", pid);
     FILE *pidmap_file = fopen(pidmap_filename, "r");
     assert(pidmap_file);
 
-    json_object *im_obj = json_object_new_array();
+    json_object *im_obj = json_object_new_array_ext(4);
     json_object_array_add(im_obj, json_object_new_string("IMAGE_ID"));
     json_object_array_add(im_obj, json_object_new_string("LOAD_ADDR"));
     json_object_array_add(im_obj, json_object_new_string("SIZE"));
@@ -258,7 +307,7 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
                 //        start, end, perms, filename);
 
                 // Create a new JSON object for this mapping
-                im_obj = json_object_new_array();
+                im_obj = json_object_new_array_ext(4);
                 // Add key-value pairs to the JSON object
                 json_object_array_add(im_obj, json_object_new_uint64((priv_inode = atol(inode))));
                 snprintf(load_addr, sizeof(load_addr), "0x%"PRIx64, start);
@@ -282,13 +331,13 @@ static void edges_mapping_to_json(json_object *edges)
     assert(json_object_is_type(edges, json_type_array));
 
     /* Example (this process had 6 threads):
-     * [ [ "EDGE_ID", "SOURCE_NODE_ID", "TARGET_NODE_ID", "EDGE_TYPE_ID", "COUNT_PER_THREAD" ],
-     *   [ 4810, 1683, 3002, 16, [ 0, 0, 1, 1, 1, 0 ] ],
-     *   [ 3460, 1597, 1598, 18, [ 1, 0, 0, 0, 0, 0 ] ],
-     *   [ 953, 1597, 1599, 13, [ 7, 0, 0, 0, 0, 0 ] ]
-     * ]
+     *  [ [ "EDGE_ID", "SOURCE_NODE_ID", "TARGET_NODE_ID", "EDGE_TYPE_ID", "COUNT_PER_THREAD" ],
+     *    [ 4810, 1683, 3002, 16, [ 0, 0, 1, 1, 1, 0 ] ],
+     *    [ 3460, 1597, 1598, 18, [ 1, 0, 0, 0, 0, 0 ] ],
+     *    [ 953, 1597, 1599, 13, [ 7, 0, 0, 0, 0, 0 ] ]
+     *  ]
      */
-    json_object *e_obj = json_object_new_array();
+    json_object *e_obj = json_object_new_array_ext(5);
     json_object_array_add(e_obj, json_object_new_string("EDGE_ID"));
     json_object_array_add(e_obj, json_object_new_string("SOURCE_NODE_ID"));
     json_object_array_add(e_obj, json_object_new_string("TARGET_NODE_ID"));
@@ -297,7 +346,7 @@ static void edges_mapping_to_json(json_object *edges)
     json_object_array_add(edges, e_obj);
 
     //FIXME
-    e_obj = json_object_new_array();
+    e_obj = json_object_new_array_ext(5);
     json_object_array_add(e_obj, json_object_new_uint64(0));
     json_object_array_add(e_obj, json_object_new_uint64(0));
     json_object_array_add(e_obj, json_object_new_uint64(0));
@@ -311,22 +360,30 @@ static void process_data_mapping_to_json(pid_t pid, json_object *process_data)
     assert(json_object_is_type(process_data, json_type_object));
 
     /* Example:
-     * { "INSTR_COUNT" : 2134576,
-     *   "INSTR_COUNT_PER_THREAD" : [ 1997750, 51676, 19794, 18381, 19598 ],
-     *   "IMAGES" : [...],
-     *   "EDGES" : [...]
-     * }
+     *  { "INSTR_COUNT" : 2134576,
+     *    "INSTR_COUNT_PER_THREAD" : [ 1997750, 51676, 19794, 18381, 19598 ],
+     *    "IMAGES" : [...],
+     *    "EDGES" : [...]
+     *  }
      */
+    uint64_t total_n_ins = 0, thread_n_ins = 0;
+    json_object *ins_obj = json_object_new_array_ext(qemu_plugin_num_vcpus());
+
+    for (int vcpu_idx = 0; vcpu_idx < qemu_plugin_num_vcpus(); vcpu_idx++) {
+         thread_n_ins = qemu_plugin_u64_get(qemu_plugin_scoreboard_u64(vcpu_n_ins), vcpu_idx);
+	 json_object_array_add(ins_obj, json_object_new_uint64(thread_n_ins));
+	 total_n_ins += thread_n_ins;
+    }
     json_object_object_add(process_data,
-                           "INSTR_COUNT", json_object_new_uint64(0));
-    json_object_object_add(process_data,
-                           "INSTR_COUNT_PER_THREAD", json_object_new_array_ext(qemu_plugin_num_vcpus()));
+                           "INSTR_COUNT", json_object_new_uint64(total_n_ins));
+    json_object_object_add(process_data, "INSTR_COUNT_PER_THREAD", ins_obj);
 
     json_object *images_obj = json_object_new_array();
     images_mapping_to_json(pid, images_obj);
+    json_object_object_add(process_data, "IMAGES", images_obj);
+
     json_object *edges_obj = json_object_new_array();
     edges_mapping_to_json(edges_obj);
-    json_object_object_add(process_data, "IMAGES", images_obj);
     json_object_object_add(process_data, "EDGES", edges_obj);
 }
 
@@ -336,17 +393,17 @@ static void processes_mapping_to_json(json_object *processes)
 
     /* Example:
      * "PROCESSES" :
-     *   [ [ "PROCESS_ID", "PROCESS_DATA" ],
-     *     [ 22814, {...} ],
-     *     [ 958, {...} ]
-     *   ]
+     *  [ [ "PROCESS_ID", "PROCESS_DATA" ],
+     *    [ 22814, {...} ],
+     *    [ 958, {...} ]
+     *  ]
      */
-    json_object *p_obj = json_object_new_array();
+    json_object *p_obj = json_object_new_array_ext(2);
     json_object_array_add(p_obj, json_object_new_string("PROCESS_ID"));
     json_object_array_add(p_obj, json_object_new_string("PROCESS_DATA"));
     json_object_array_add(processes, p_obj);
 
-    p_obj = json_object_new_array();
+    p_obj = json_object_new_array_ext(2);
     pid_t pid = getpid();
     json_object *pd_obj = json_object_new_object();
     process_data_mapping_to_json(pid, pd_obj);
@@ -365,15 +422,16 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
 
     // Create a new JSON object (an empty object {})
     json_object *bbgraph_json = json_object_new_object();
-    /* Derived from SDE's format: https://www.intel.com/content/dam/develop/external/us/en/documents/dcfg-format-548994.pdf
-     * top-level object:
-        { "MAJOR_VERSION" : 0,
-          "MINOR_VERSION" : 6,
-          "FILE_NAMES" : [...],
-          "EDGE_TYPES" : [...],
-          "SPECIAL_NODES" : [...],
-          "PROCESSES" : [...],
-        }
+    /* Derived from SDE's format:
+     *  https://www.intel.com/content/dam/develop/external/us/en/documents/dcfg-format-548994.pdf
+     * Top-level object:
+     *  { "MAJOR_VERSION" : 0,
+     *    "MINOR_VERSION" : 6,
+     *    "FILE_NAMES" : [...],
+     *    "EDGE_TYPES" : [...],
+     *    "SPECIAL_NODES" : [...],
+     *    "PROCESSES" : [...],
+     *  }
      */
     json_object_object_add(bbgraph_json,
                            "MAJOR_VERSION", json_object_new_uint64(0));
@@ -381,14 +439,19 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
                            "MINOR_VERSION", json_object_new_uint64(1));
 
     json_object *FILE_NAMES = json_object_new_array();
-    json_object *EDGE_TYPES = json_object_new_array();                          // ignore for now
-    json_object *SPECIAL_NODES = json_object_new_array();                       // ignore for now
-    json_object *PROCESSES = json_object_new_array();
     file_names_mapping_to_json(FILE_NAMES);
-    processes_mapping_to_json(PROCESSES);
     json_object_object_add(bbgraph_json, "FILE_NAMES", FILE_NAMES);
+
+    json_object *EDGE_TYPES = json_object_new_array();
+    edge_types_mapping_to_json(EDGE_TYPES);
     json_object_object_add(bbgraph_json, "EDGE_TYPES", EDGE_TYPES);
+
+    json_object *SPECIAL_NODES = json_object_new_array();
+    special_nodes_mapping_to_json(SPECIAL_NODES);
     json_object_object_add(bbgraph_json, "SPECIAL_NODES", SPECIAL_NODES);
+
+    json_object *PROCESSES = json_object_new_array();
+    processes_mapping_to_json(PROCESSES);
     json_object_object_add(bbgraph_json, "PROCESSES", PROCESSES);
 
     // Convert the JSON object to a string
@@ -396,18 +459,17 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
                                                           (JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY));
     // Write the JSON string to the file
     fprintf(json_out_fd, "%s\n", json_str);
+    fclose(json_out_fd);
+
+    // Free the JSON object memory
+    json_object_put(bbgraph_json);
 
     for (int i = 0; i < qemu_plugin_num_vcpus(); i++)
         vcpu_exit(i, NULL);
 
     g_hash_table_unref(bblock_htable);
     g_free(out_prefix);
-    qemu_plugin_scoreboard_free(vcpus);
-
-    // Free the JSON object memory
-    json_object_put(bbgraph_json);
-
-    fclose(json_out_fd);
+    qemu_plugin_scoreboard_free(vcpu_n_ins);
 }
 
 static void free_scoreboard_bb_data(void *data)
@@ -445,7 +507,7 @@ static void vcpu_exit(unsigned int vcpu_index, void *udata)
             continue;
         }
 
-        fprintf(stderr, ":%u:%" PRIu64 " ", bb->index, bb_count);
+        fprintf(stderr, ":%u:%" PRIu64 " ", bb->table_idx, bb_count);
         qemu_plugin_u64_set(bb_count_u64(bb), vcpu_index, 0);
     }
 
@@ -454,26 +516,27 @@ static void vcpu_exit(unsigned int vcpu_index, void *udata)
 
 static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 {
-    uint64_t n_insns = qemu_plugin_tb_n_insns(tb);
-    uint64_t vaddr = qemu_plugin_tb_vaddr(tb);
-    Bblock_t *bb;
+    Bblock_t *bb = NULL;
+    uint64_t bb_pc = qemu_plugin_tb_vaddr(tb);
+    uint64_t bb_n_insns = qemu_plugin_tb_n_insns(tb);
+    uint64_t bb_id = bb_pc ^ bb_n_insns;
 
     g_rw_lock_writer_lock(&bblock_htable_lock);
-
-
-    bb = g_hash_table_lookup(bblock_htable, &vaddr);
+    bb = g_hash_table_lookup(bblock_htable, (gconstpointer)bb_id);
     if (!bb) {
         bb = g_new(Bblock_t, 1);
         assert(bb);
-        bb->vaddr = vaddr;
-        bb->count = qemu_plugin_scoreboard_new(sizeof(uint64_t));
-        bb->index = g_hash_table_size(bblock_htable);
-        g_hash_table_replace(bblock_htable, &bb->vaddr, bb);
+        bb->vaddr = bb_pc;
+        bb->count = qemu_plugin_scoreboard_new(sizeof(uint64_t));               // set to 0 internally
+        bb->table_idx = g_hash_table_size(bblock_htable);
+        g_hash_table_replace(bblock_htable, (gpointer)bb_id, bb);
     }
     g_rw_lock_writer_unlock(&bblock_htable_lock);
 
     qemu_plugin_register_vcpu_tb_exec_inline_per_vcpu(
-        tb, QEMU_PLUGIN_INLINE_ADD_U64, bb_count_u64(bb), n_insns);
+        tb, QEMU_PLUGIN_INLINE_ADD_U64, qemu_plugin_scoreboard_u64(vcpu_n_ins), bb_n_insns);
+    qemu_plugin_register_vcpu_tb_exec_inline_per_vcpu(
+        tb, QEMU_PLUGIN_INLINE_ADD_U64, bb_count_u64(bb), bb_n_insns);
 }
 
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
@@ -504,7 +567,8 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 
     bblock_htable = g_hash_table_new_full(g_int64_hash, g_int64_equal, NULL,
                                           free_scoreboard_bb_data);
-    vcpus = qemu_plugin_scoreboard_new(sizeof(Vcpu_t));
+    //vcpus = qemu_plugin_scoreboard_new(sizeof(Vcpu_t));
+    vcpu_n_ins = qemu_plugin_scoreboard_new(sizeof(uint64_t));
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
     qemu_plugin_register_vcpu_init_cb(id, vcpu_init);
     qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
