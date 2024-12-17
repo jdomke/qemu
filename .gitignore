@@ -21,6 +21,8 @@ GTAGS
 *.patch
 *.gcov
 /*.bb
+/*.json
+/*.json.bz2
 /stream
 /sum
 /json-c-inst/
