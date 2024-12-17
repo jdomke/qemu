@@ -24,7 +24,7 @@ export PKG_CONFIG_PATH="$(pwd)/json-c-inst/lib64/pkgconfig${PKG_CONFIG_PATH:+:${
 rm -rf build
 mkdir build
 cd build
-../configure --extra-cflags="$(pkg-config --cflags json-c)" --extra-ldflags="$(pkg-config --libs json-c)" --target-list=aarch64-linux-user --enable-plugins --disable-docs 2>&1 |tee -a build.log
+../configure --extra-cflags="$(pkg-config --cflags json-c,bzip2)" --extra-ldflags="$(pkg-config --libs json-c,bzip2)" --target-list=aarch64-linux-user --enable-plugins --disable-docs 2>&1 |tee -a build.log
 make -j$(nproc) all  2>&1 |tee -a build.log
 cd -
 ```
