@@ -29,8 +29,9 @@ make -j$(nproc) all  2>&1 |tee -a build.log
 cd -
 ```
 
-# Build guest application (e.g. stream)
+# Build guest applications (e.g. stream)
 ```
+bash -c "source ~/llvm-v19.1.4/init.sh; clang -o sum ./misc/sum.c -O0 -static"
 bash -c "source ~/llvm-v19.1.4/init.sh; clang -o stream ./misc/stream.c -fopenmp -DSTREAM_ARRAY_SIZE=1024 -DTUNED"
 ```
 
@@ -41,10 +42,10 @@ bash -c "source ~/llvm-v19.1.4/init.sh; clang -o stream ./misc/stream.c -fopenmp
     -d plugin ./stream
 ```
 
-# Newly developed bbgraph plugin (based on bbv and cflow features)
+# Newly developed Dynamic Control-Flow Graph plugin (based on bbv and cflow features)
 ```
-./build/qemu-aarch64 -E OMP_NUM_THREADS=12 -E LD_DEBUG=files \
-    -plugin 'build/contrib/plugins/libbbgraph.so,outfile=per_thread_bbgraph' \
+./build/qemu-aarch64 -E OMP_NUM_THREADS=12 \
+    -plugin 'build/contrib/plugins/libdcfg.so,outfile=stream.dcfg' \
     -d plugin ./stream
 ```
 

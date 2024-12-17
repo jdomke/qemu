@@ -22,4 +22,5 @@ GTAGS
 *.gcov
 /*.bb
 /stream
+/sum
 /json-c-inst/
