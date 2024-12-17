@@ -49,5 +49,15 @@ bash -c "source ~/llvm-v19.1.4/init.sh; clang -o stream ./misc/stream.c -fopenmp
     -d plugin ./stream
 ```
 
+# Install dependencies for block parser
+```
+python3 -m pip install --user -r misc/requirements.txt
+```
+
+# Exec block analyzer to get cycles from MCA estimates
+```
+python3 ./misc/parse_basic_blocks.py --sde_json ./stream.dcfg.json.bz2 --cpu_arch a64fx
+```
+
 # old readme
 [here](README_org.rst)
