@@ -7,6 +7,9 @@
 #include <stdio.h>
 #include <glib.h>
 
+#include <bzlib.h>
+#define BZ2_BLOCK_SIZE 9  // Compression level (1-9, 9 is highest compression)
+
 #include "qemu-plugin.h"
 #include "json.h"
 
@@ -52,20 +55,50 @@ static void edge_types_mapping_to_json(json_object *);
 static void special_nodes_mapping_to_json(json_object *);
 static void symbol_data_mapping_to_json(uint64_t, json_object *);
 static void source_data_mapping_to_json(uint64_t, json_object *);
-static void basic_blocks_mapping_to_json(uint64_t, uint64_t, uint64_t, json_object *);
+static void basic_blocks_mapping_to_json(uint64_t, uint64_t, uint64_t,
+                                         json_object *);
 static void routines_mapping_to_json(uint64_t, json_object *);
-static void image_data_mapping_to_json(uint64_t, uint64_t, uint64_t, json_object *);
+static void image_data_mapping_to_json(uint64_t, uint64_t, uint64_t,
+                                       json_object *);
 static void images_mapping_to_json(pid_t, json_object *);
 static void edges_mapping_to_json(json_object *);
 static void process_data_mapping_to_json(pid_t, json_object *);
 static void processes_mapping_to_json(json_object *);
 static void bbgraph_to_json(FILE *);
+static void compress_json_to_bz2(json_object *, FILE *);
 
 static void plugin_init(void);
 static void plugin_exit(qemu_plugin_id_t, void *);
 static void vcpu_tb_branched_exec(unsigned int, void *);
 static void vcpu_tb_trans(qemu_plugin_id_t, struct qemu_plugin_tb *);
 static void free_scoreboard_bb_data(void *);
+static void free_scoreboard_edge_data(void *);
+
+
+static void compress_json_to_bz2(json_object *json_obj, FILE *json_out_fd)
+{
+    g_assert(json_obj && json_out_fd);
+
+    // Bzip2 compression variables
+    BZFILE *bz_file;
+    int bzerror;
+
+    // Initialize Bzip2 stream for writing
+    bz_file = BZ2_bzWriteOpen(&bzerror, json_out_fd, BZ2_BLOCK_SIZE, 0, 30);
+    g_assert(bzerror == BZ_OK);
+
+    // Convert the JSON object to a string
+    const char *json_str = json_object_to_json_string_ext(
+        json_obj, (JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY));
+
+    // Write compressed data
+    BZ2_bzWrite(&bzerror, bz_file, (void*)json_str, strlen(json_str));
+    g_assert(bzerror == BZ_OK);
+
+    // Finish compression and close the files
+    BZ2_bzWriteClose(&bzerror, bz_file, 0, NULL, NULL);
+    g_assert(bzerror == BZ_OK);
+}
 
 static void file_names_mapping_to_json(json_object *file_names)
 {
@@ -73,7 +106,7 @@ static void file_names_mapping_to_json(json_object *file_names)
 
     /* Example:
      * "FILE_NAMES" :
-     *  [ [ "FILE_NAME_ID", "FILE_NAME" ],                                     // use inode as ID
+     *  [ [ "FILE_NAME_ID", "FILE_NAME" ],               // use inode as ID
      *    [ 2, “\/usr\/joe\/src\/misc\/hello-world" ],
      *    [ 5, "\/lib64\/libgcc_s.so" ],
      *    [ 4, “\/usr\/joe\/src\/misc\/hello-world.c" ],
@@ -99,18 +132,20 @@ static void file_names_mapping_to_json(json_object *file_names)
         // parse the line for start, end, permissions, offset, etc.
         if (sscanf(line, "%lx-%lx %4s %8s %5s %10s %255s",
                    &start, &end, perms, offset, dev, inode, filepath) >= 6) {
-            //fprintf(stderr, "%s\n", line);
+            //fprintf(stderr, "%s", line);
             if (perms[0] == 'r' && perms[1] != 'w'
                 && 0 < atol(inode) && prev_inode != atol(inode)) {
                 //fprintf(stderr,
-                //        "start: 0x%lx, end: 0x%lx, permissions: %s, path: %s\n",
+                //        "start: 0x%lx, end: 0x%lx, perm: %s, path: %s\n",
                 //        start, end, perms, filepath);
 
                 // Create a new JSON object for this mapping
                 fn_obj = json_object_new_array_ext(2);
                 // Add key-value pairs to the JSON object
-                json_object_array_add(fn_obj, json_object_new_uint64((prev_inode = atol(inode))));
-                json_object_array_add(fn_obj, json_object_new_string(filepath));
+                json_object_array_add(
+                    fn_obj, json_object_new_uint64((prev_inode = atol(inode))));
+                json_object_array_add(
+                    fn_obj, json_object_new_string(filepath));
                 json_object_array_add(file_names, fn_obj);
             }
         }
@@ -324,7 +359,7 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
     g_assert(json_object_is_type(images, json_type_array));
 
     /* Example:
-     *  [ [ "IMAGE_ID", "LOAD_ADDR", "SIZE", "IMAGE_DATA" ],                     // use inode as ID
+     *  [ [ "IMAGE_ID", "LOAD_ADDR", "SIZE", "IMAGE_DATA" ], // use inode as ID
      *    [ 1, "0x400000", 2102216, {...} ],
      *    [ 2, "0x2aaaaaaab000", 1166728, {...} ]
      *  ]
@@ -334,7 +369,7 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
     FILE *pidmap_file = fopen(pidmap_filename, "r");
     g_assert(pidmap_file);
 
-    json_object *im_obj = json_object_new_array_ext(4);
+    json_object *im_obj = json_object_new_array_ext(4), *imdata_obj = NULL;
     json_object_array_add(im_obj, json_object_new_string("IMAGE_ID"));
     json_object_array_add(im_obj, json_object_new_string("LOAD_ADDR"));
     json_object_array_add(im_obj, json_object_new_string("SIZE"));
@@ -345,7 +380,6 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
     uint64_t start, end, prev_inode = 0;
     char perms[5], offset[9], dev[6], inode[11];
     char filename[128+256];
-    json_object *im_data_obj = NULL;
 
     while (fgets(line, sizeof(line), pidmap_file)) {
         // parse the line for start, end, permissions, offset, etc.
@@ -353,21 +387,21 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
                    &start, &end, perms, offset, dev, inode, filename) >= 6) {
             if (perms[0] == 'r' && perms[1] != 'w'
                 && 0 < atol(inode) && prev_inode != atol(inode)) {
-                //fprintf(stderr,
-                //        "start: 0x%lx, end: 0x%lx, permissions: %s, path: %s\n",
-                //        start, end, perms, filename);
 
                 // Create a new JSON object for this mapping
                 im_obj = json_object_new_array_ext(4);
                 // Add key-value pairs to the JSON object
-                json_object_array_add(im_obj, json_object_new_uint64((prev_inode = atol(inode))));
+                json_object_array_add(
+                    im_obj, json_object_new_uint64((prev_inode = atol(inode))));
                 snprintf(load_addr, sizeof(load_addr), "0x%"PRIx64, start);
-                json_object_array_add(im_obj, json_object_new_string(load_addr));
-                json_object_array_add(im_obj, json_object_new_uint64(end-start));
+                json_object_array_add(
+                    im_obj, json_object_new_string(load_addr));
+                json_object_array_add(
+                    im_obj, json_object_new_uint64(end-start));
 
-                im_data_obj = json_object_new_object();
-                image_data_mapping_to_json(atol(inode), start, end, im_data_obj);
-                json_object_array_add(im_obj, im_data_obj);
+                imdata_obj = json_object_new_object();
+                image_data_mapping_to_json(atol(inode), start, end, imdata_obj);
+                json_object_array_add(im_obj, imdata_obj);
 
                 json_object_array_add(images, im_obj);
             }
@@ -448,9 +482,10 @@ static void process_data_mapping_to_json(pid_t pid, json_object *process_data)
         json_object_array_add(ins_obj, json_object_new_uint64(thread_n_ins));
         total_n_ins += thread_n_ins;
     }
-    json_object_object_add(process_data,
-                           "INSTR_COUNT", json_object_new_uint64(total_n_ins));
-    json_object_object_add(process_data, "INSTR_COUNT_PER_THREAD", ins_obj);
+    json_object_object_add(
+        process_data, "INSTR_COUNT", json_object_new_uint64(total_n_ins));
+    json_object_object_add(
+        process_data, "INSTR_COUNT_PER_THREAD", ins_obj);
 
     json_object *images_obj = json_object_new_array();
     images_mapping_to_json(pid, images_obj);
@@ -505,10 +540,10 @@ static void bbgraph_to_json(FILE *json_out_fd)
     // Create a new JSON object (an empty object {})
     json_object *bbgraph_json = json_object_new_object();
 
-    json_object_object_add(bbgraph_json,
-                           "MAJOR_VERSION", json_object_new_uint64(0));
-    json_object_object_add(bbgraph_json,
-                           "MINOR_VERSION", json_object_new_uint64(1));
+    json_object_object_add(
+        bbgraph_json, "MAJOR_VERSION", json_object_new_uint64(0));
+    json_object_object_add(
+        bbgraph_json, "MINOR_VERSION", json_object_new_uint64(1));
 
     json_object *FILE_NAMES = json_object_new_array();
     file_names_mapping_to_json(FILE_NAMES);
@@ -526,12 +561,8 @@ static void bbgraph_to_json(FILE *json_out_fd)
     processes_mapping_to_json(PROCESSES);
     json_object_object_add(bbgraph_json, "PROCESSES", PROCESSES);
 
-    // Convert the JSON object to a string
-    const char *json_str = json_object_to_json_string_ext(
-        bbgraph_json, (JSON_C_TO_STRING_SPACED | JSON_C_TO_STRING_PRETTY));
-
-    // Write the JSON string to the file
-    fprintf(json_out_fd, "%s\n", json_str);
+    // Compress and write the JSON object to file
+    compress_json_to_bz2(bbgraph_json, json_out_fd);
 
     // Free the JSON object memory
     json_object_put(bbgraph_json);
@@ -540,7 +571,13 @@ static void bbgraph_to_json(FILE *json_out_fd)
 static void free_scoreboard_bb_data(void *data)
 {
     qemu_plugin_scoreboard_free(((Bblock_t *)data)->count);
+    g_array_free(((Bblock_t *)data)->edges, true);
     g_free(data);
+}
+
+static void free_scoreboard_edge_data(void *data)
+{
+    qemu_plugin_scoreboard_free(((EdgeData_t *)data)->count);
 }
 
 /* Called when we detect a linear execution (pc == pc_after_block). This means
@@ -597,9 +634,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     struct qemu_plugin_insn *last_insn = qemu_plugin_tb_get_insn(tb, bb_n_insns - 1);
     uint64_t bb_id = bb_pc ^ bb_n_insns;
 
-    g_assert(bb_pc == qemu_plugin_insn_vaddr(first_insn)); //FIXME: is that so????
-
-//    fprintf(stderr, "pc=0x%"PRIx64" bb_id=%"PRIu64" next=0x%"PRIx64"\n", bb_pc, bb_id, qemu_plugin_insn_vaddr(last_insn)+qemu_plugin_insn_size(last_insn));
+    g_assert(bb_pc == qemu_plugin_insn_vaddr(first_insn)); //FIXME: true ????
 
     g_rw_lock_writer_lock(&bblock_htable_lock);
     bb = g_hash_table_lookup(bblock_htable, (gconstpointer)bb_id);
@@ -615,6 +650,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
         //bb->vaddr_last_instr = bb_pc - qemu_plugin_insn_vaddr(last_insn);
         bb->count = qemu_plugin_scoreboard_new(sizeof(uint64_t));               // set to 0 internally
         bb->edges = g_array_new(true, true, sizeof(EdgeData_t));;
+        g_array_set_clear_func(bb->edges, free_scoreboard_edge_data);
         g_hash_table_replace(bblock_htable, (gpointer)bb_id, bb);
     }
     g_rw_lock_writer_unlock(&bblock_htable_lock);
@@ -663,15 +699,16 @@ static void plugin_init(void)
 
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
-    g_autofree gchar *json_out_file = g_strdup_printf("%s.json", out_prefix);
-    FILE *json_out_fd = fopen(json_out_file, "w");
+    FILE *json_out_fd = fopen(g_strdup_printf("%s.json.bz2", out_prefix), "w");
     g_assert(json_out_fd);
+
     bbgraph_to_json(json_out_fd);
-    fclose(json_out_fd);
 
     g_hash_table_unref(bblock_htable);
     g_free(out_prefix);
     qemu_plugin_scoreboard_free(processor_state);
+
+    fclose(json_out_fd);
 }
 
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
