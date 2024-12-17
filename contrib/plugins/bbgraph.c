@@ -589,6 +589,8 @@ static void free_scoreboard_edge_data(void *data)
  */
 static void vcpu_tb_branched_exec(unsigned int vcpu_idx, void *udata)
 {
+    g_assert(udata);
+
     Bblock_t *prev_bb = NULL;
     EdgeData_t *e_data = NULL;
     GArray *prev_bb_edges_list = NULL;
@@ -601,19 +603,20 @@ static void vcpu_tb_branched_exec(unsigned int vcpu_idx, void *udata)
 	return;
 
     g_rw_lock_reader_lock(&bblock_htable_lock);
+
     prev_bb = g_hash_table_lookup(bblock_htable, (gconstpointer)previous_bb_id);
     g_assert(prev_bb);
+
     g_rw_lock_reader_unlock(&bblock_htable_lock);
 
+    g_rw_lock_writer_lock(&(prev_bb->lock));
+
     /* Check if we had this block-to-block transition before */
-    g_rw_lock_reader_lock(&(prev_bb->lock));
     prev_bb_edges_list = prev_bb->edges;
     for (int i = 0; i < prev_bb_edges_list->len; i++)
         if (g_array_index(prev_bb_edges_list, EdgeData_t, i).dst_bb_id == current_bb_id)
             e_data = &g_array_index(prev_bb_edges_list, EdgeData_t, i);
-    g_rw_lock_reader_unlock(&(prev_bb->lock));
     /* ...if we've never seen this before, then allocate a new entry */
-    g_rw_lock_writer_lock(&(prev_bb->lock));
     if (!e_data) {
         EdgeData_t new_edge = { .dst_bb_id = current_bb_id };
 	g_array_append_val(prev_bb_edges_list, new_edge);
@@ -622,6 +625,7 @@ static void vcpu_tb_branched_exec(unsigned int vcpu_idx, void *udata)
 	e_data->count = qemu_plugin_scoreboard_new(sizeof(uint64_t));
     }
     qemu_plugin_u64_add(qemu_plugin_scoreboard_u64(e_data->count), vcpu_idx, 1);
+
     g_rw_lock_writer_unlock(&(prev_bb->lock));
 }
 
@@ -633,6 +637,8 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     struct qemu_plugin_insn *first_insn = qemu_plugin_tb_get_insn(tb, 0);
     struct qemu_plugin_insn *last_insn = qemu_plugin_tb_get_insn(tb, bb_n_insns - 1);
     uint64_t bb_id = bb_pc ^ bb_n_insns;
+
+//    fprintf(stderr, "bb_pc=0x%"PRIx64"\n", bb_pc);
 
     g_assert(bb_pc == qemu_plugin_insn_vaddr(first_insn)); //FIXME: true ????
 
