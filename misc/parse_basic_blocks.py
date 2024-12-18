@@ -30,18 +30,19 @@ KNOWN_ARCHS = {
     'core2': None, 'nehalem': None, 'westmere': None, 'sandybridge': None,
     'ivybridge': None, 'haswell': None, 'broadwell': None, 'skylake': None,
     'mic_knl': None, 'skylake_avx512': None, 'cannonlake': None,
-    'cascadelake': None, 'icelake': None,
+    'cascadelake': None, 'icelake': None, 'sapphirerapids': None,
     # AMD
     'k10': None, 'bulldozer': None, 'piledriver': None, 'steamroller': None,
-    'excavator': None, 'zen': None, 'zen2': None,
+    'excavator': None, 'zen': None, 'zen2': None, 'zen3': None, 'zen4': None,
     # IBM
     'ppc64': None, 'power7': None, 'power8': None, 'power9': None,
-    'ppc64le': None, 'power8le': None, 'power9le': None,
+    'ppc64le': None, 'power8le': None, 'power9le': None, 'power10le': None,
     # ARM
     'aarch64': None, 'thunderx2': None, 'a64fx': None, 'graviton': None,
-    'graviton2': None, 'arm': None,
+    'graviton2': None, 'neoverse_n1': None, 'neoverse_n2': None,
+    'm1': None, 'm2': None, 'arm': None,
     # other
-    'ppc': None, 'ppcle': None, 'sparc': None, 'sparc64': None
+    'ppc': None, 'ppcle': None, 'sparc': None, 'sparc64': None, 'riscv64': None
 }
 
 def _get_OBJDUMP_ASSEMBLY(sde_files=None):
@@ -49,14 +50,17 @@ def _get_OBJDUMP_ASSEMBLY(sde_files=None):
 
     objdp_asm = {}
 
+    fn_elf_part = compile(r'^\s*LOAD\s+\w+\s+(\w+)\s+\w+\s+\w+\s+\w+\s+R\s+E\s+\w+$')
     # offset, fn name
-    fn_hdr = compile(r'^(\w+)\s+<(.+)>\s+\(File\s+Offset:\s+(\w+)\):$')
+    #fn_hdr = compile(r'^(\w+)\s+<(.+)>\s+\(File\s+Offset:\s+(\w+)\):$')
+    fn_hdr = compile(r'^(\w+)\s+<(.+)>:$')
     # offset, instruction (+comment)
-    fn_asm_part = compile(r'^\s+(\w+):\s+([\.\(]?\w{2,}.*)$')
+    #fn_asm_part = compile(r'^\s+(\w+):\s+([\.\(]?\w{2,}.*)$')
+    fn_asm_part = compile(r'^\s+(\w+):\s+([\.\(]?\w{1,}.*)$')
     fn_asm_igno = compile(
         r'^(.*)\s+(<.*>)\s+\(\s*(File\s+Offset:\s+)(\w+)\s*\)$')
     __trash__ = compile(
-        r'^$|^.*:\s+file format elf.*$|^Disassembly of section.*$')
+        r'^$|^.*:\s+file format elf.*$|^Disassembly.*$|^\s+#.*|^Sections.*|^Idx .*|^\s*\w+\s+.*\w+\s+\w+.*|^Program .*|^Dynamic .*|^\s+SONAME .*|^\s+NEEDED .*|^\s+[A-Z_\d]+\s+\w+|^Version .*|^.* GLIBC_.*|^\d+\s+\w+\s+\w+\s+.*')
 
     for fid in sde_files:
         FILE_NAME = sde_files[fid]
@@ -68,32 +72,43 @@ def _get_OBJDUMP_ASSEMBLY(sde_files=None):
             print('WRN 01: skipping missing file %s' % FILE_NAME)
             continue
 
-        # get objdump for each file (main binary and all shared libs)
-        p = run(['objdump',
-                 '--disassemble',
-                 '--disassembler-options=att-mnemonic',
-                 '--no-show-raw-insn',
-                 '--wide',
-                 '--disassemble-zeroes',
-                 '--file-offsets', FILE_NAME], stdout=PIPE)
+        # get the stupid load address first -> hit on first find of 'LOAD'
+        p = run(['llvm-readelf', '--program-headers', FILE_NAME], stdout=PIPE)
+        load_os = None
+        for line in p.stdout.decode().splitlines():
+            if fn_elf_part.match(line):
+                load_os = int(fn_elf_part.match(line).group(1).strip(), 16)
+                break
+        assert(load_os is not None)
 
-        curr_fn_os, load_os = None, None
+        # get objdump for each file (main binary and all shared libs)
+        p = run(['llvm-objdump',
+                 '--disassembler-color=off',
+                 '--disassemble',
+                 '--disassemble-zeroes',
+                 '--no-show-raw-insn',
+                 FILE_NAME], stdout=PIPE)
+
+        curr_fn_os, _ = None, None
         for line in p.stdout.decode().splitlines():
             if fn_hdr.match(line):
 
                 fn = fn_hdr.match(line)
-                fn_os, fn_name, fn_real_os = \
-                    fn.group(1).strip(), fn.group(2).strip(), \
-                    fn.group(3).strip()
+                #fn_os, fn_name, fn_real_os = \
+                #    fn.group(1).strip(), fn.group(2).strip(), \
+                #    fn.group(3).strip()
+                fn_os, fn_name = fn.group(1).strip(), fn.group(2).strip()
 
                 # XXX: executable ELF64 binaries linked by ld have canonical
                 #      base address offset of 0x400000, but SDE subtracts this
-                if load_os is None:
-                    load_os = int(fn_os, 16) - int(fn_real_os, 16)
-                    if load_os == int('0x400000', 16):
-                        objdp_asm[fid]['LO'] = load_os
-                    elif load_os > 0:
-                        exit('ERR: never seen before base address offset')
+                # XXX: much bigger mess nowadays and esp for non-X86 binaries
+                #      so we switch to looking for first TEXT in Sections table
+                #if load_os is None:
+                #    load_os = int(fn_os, 16) - int(fn_real_os, 16)
+                #    if load_os == int('0x400000', 16):
+                #        objdp_asm[fid]['LO'] = load_os
+                #    elif load_os > 0:
+                #        exit('ERR: never seen before base address offset')
 
                 curr_fn_os = int(fn_os, 16) - load_os
                 os_str = '0x' + format(curr_fn_os, 'x')
@@ -178,15 +193,14 @@ def _get_single_block_from_OBJDUMP(sde_file=None, from_addr=None,
         r'^(.*)\s+(<.*>)\s+\(\s*(File\s+Offset:\s+)(\w+)\s*\)$')
 
     # open interval [.,.), so --stop-address=0x... is excluded from output
-    p = run(['objdump',
+    p = run(['llvm-objdump',
+             '--disassembler-color=off',
              '--disassemble',
-             '--disassembler-options=att-mnemonic',
-             '--no-show-raw-insn',
-             '--wide',
              '--disassemble-zeroes',
+             '--no-show-raw-insn',
              '--start-address=0x' + format(start_addr, 'x'),
              '--stop-address=0x' + format(start_addr + num_byte, 'x'),
-             '--file-offsets', sde_file], stdout=PIPE)
+             sde_file], stdout=PIPE)
 
     for line in p.stdout.decode().splitlines():
         if fn_asm_part.match(line):
@@ -352,39 +366,77 @@ def _parse_IMAGE_DATA(sde_image_data=None, sde_files=None, objdp_asm=None):
         exit('ERR: no FILE_NAME_ID found in IMAGE_DATA')
 
     if 'SYMBOLS' in sde_image_data:
-        _parse_SYMBOLS(sde_image_data, objdp_asm, symbols)
+        _parse_SYMBOLS(sde_image_data, sde_files, objdp_asm, symbols)
     if 'SOURCE_DATA' in sde_image_data:
         _parse_SOURCE_DATA(sde_image_data, src_data)
     if 'BASIC_BLOCKS' in sde_image_data:
         _parse_BASIC_BLOCKS(sde_image_data, sde_files, objdp_asm, bb)
     if 'ROUTINES' in sde_image_data:
-        _parse_ROUTINES(sde_image_data, routines)
+        _parse_ROUTINES(symbols, bb, routines)
 
     return (FILE_NAME_ID, symbols, src_data, bb, routines)
 
 
-def _parse_SYMBOLS(sde_image_data=None, objdp_asm=None, symbols=None):
-    assert(isinstance(sde_image_data, dict) and isinstance(objdp_asm, dict)
-           and isinstance(symbols, dict))
+def _parse_SYMBOLS(sde_image_data=None, sde_files=None, objdp_asm=None, symbols=None):
+    assert(isinstance(sde_image_data, dict) and isinstance(sde_files, dict)
+           and isinstance(objdp_asm, dict) and isinstance(symbols, dict))
 
-    # "SYMBOLS" :   // XXX: SDE incomplete, some symbols missing, check objdump
-    #   [ [ "NAME", "ADDR_OFFSET", "SIZE" ],
-    #     [ "free", "0x127f0", 60],
-    #     [ "malloc", "0x12940", 13], ...
-    #   ]
-    for NAME, ADDR_OFFSET, SIZE in sde_image_data['SYMBOLS'][1:]:
-        if NAME != '.text':
-            OFFSET, first = int(ADDR_OFFSET, 16), True
-            if OFFSET in objdp_asm:
-                NAME = objdp_asm[OFFSET]['Func']
+    # "SYMBOLS" :   // XXX: no more SDE -> check objdump:
+    #   0000000000404d30 0000000000002050 T main
+    #   0000000000ffa3a0 0000000000000890 d main_arena
+    #   0000000001066f58 0000000000000020 B main_kmpc_tree_reduct_lock_0
+    #   0000000000b47a80 0000000000000547 t make_request
+    #   0000000000adbe70 00000000000000f2 W mallinfo
+    #   0000000000ad9ce0 00000000000000d6 T malloc
+
+    fn_elf_part = compile(r'^\s*LOAD\s+\w+\s+(\w+)\s+\w+\s+\w+\s+\w+\s+R\s+E\s+\w+$')
+    # get the stupid load address first -> hit on first find of 'LOAD'
+    p = run(['llvm-readelf',
+             '--program-headers',
+             sde_files[sde_image_data['FILE_NAME_ID']]], stdout=PIPE)
+    load_os = None
+    for line in p.stdout.decode().splitlines():
+        if fn_elf_part.match(line):
+            load_os = int(fn_elf_part.match(line).group(1).strip(), 16)
+            break
+    assert(load_os is not None)
+
+    sym_part = compile(r'^(\w+)\s+(\w+)\s+(\w)\s+(.*)$')
+    # now we can check the symbol table
+    p = run(['llvm-nm',
+             '--no-weak',
+             '--defined-only',
+             '--numeric-sort',
+             '--demangle',
+             '--print-size',
+             sde_files[sde_image_data['FILE_NAME_ID']]], stdout=PIPE)
+
+    for line in p.stdout.decode().splitlines():
+        if sym_part.match(line):
+            s = sym_part.match(line)
+            OFFSET, SIZE, _, NAME = int(s.group(1).strip(), 16) - load_os, \
+                int(s.group(2).strip(), 16), s.group(3).strip(), \
+                s.group(4).strip()
+            if OFFSET < 0: continue
             symbols[OFFSET] = {'Func': NAME, 'Size': SIZE,
                                'Offset': '0x' + format(OFFSET, 'x')}
-        else:
-            # some bigger functions seem to be split in 200k chunks and
-            # the initial size is incorrect, but a sum of the .text chunks
-            if first:
-                symbols[OFFSET]['Size'] = 0
-            symbols[OFFSET]['Size'] += SIZE
+
+    plt_part = compile(r'^\s*\w+\s+.plt\s+(\w+)\s+(\w+)\s+.*')
+    # need ducking .plt section too.. well, llvm-objdump gives full but duck it
+    p = run(['llvm-objdump',
+             '--section=.plt',
+             '--section-headers',
+             sde_files[sde_image_data['FILE_NAME_ID']]], stdout=PIPE)
+
+    for line in p.stdout.decode().splitlines():
+        if plt_part.match(line):
+            p = plt_part.match(line)
+            OFFSET, SIZE, _, NAME = int(p.group(2).strip(), 16) - load_os, \
+                int(p.group(1).strip(), 16), '', '.plt'
+            if OFFSET < 0: continue
+            symbols[OFFSET] = {'Func': NAME, 'Size': SIZE,
+                               'Offset': '0x' + format(OFFSET, 'x')}
+    for s in symbols: print('s:',symbols[s])
 
 
 def _add_fake_vdso_info_to_asm(sde_image_data=None, objdp_asm=None):
@@ -427,6 +479,7 @@ def _parse_BASIC_BLOCKS(sde_image_data=None, sde_files=None, objdp_asm=None,
     # COUNT : total nr of times this block was executed across all threads
     for NODE_ID, ADDR_OFFSET, SIZE, NUM_INSTRS, _, COUNT in sde_image_data[
             'BASIC_BLOCKS'][1:]:
+        print('nnid',NODE_ID)
         fn_offset = _get_fn_os_for_block(objdp_asm, int(ADDR_OFFSET, 16))
         fn_name = objdp_asm[fn_offset]['Func']
         bb[NODE_ID] = {
@@ -438,6 +491,7 @@ def _parse_BASIC_BLOCKS(sde_image_data=None, sde_files=None, objdp_asm=None,
                   (ADDR_OFFSET, sde_files[sde_image_data['FILE_NAME_ID']]))
             # can happen sometimes, SDE's SYMBOLS list seems incomplete, so
             # we should record the offset just in case we get ID/name later
+    if 139906446259479 in bb: print('mofo is there')
 
 
 def _get_fn_os_for_block(objdp_asm=None, bb_offset=None):
@@ -453,28 +507,35 @@ def _get_fn_os_for_block(objdp_asm=None, bb_offset=None):
         # return None
 
 
-def _parse_ROUTINES(sde_image_data=None, routines=None):
-    assert(isinstance(sde_image_data, dict) and isinstance(routines, dict))
+def _parse_ROUTINES(symbols=None, bb=None, routines=None):
+    assert(isinstance(symbols, dict) and isinstance(bb, dict)
+           and isinstance(routines, dict))
 
-    # "ROUTINES" :  // XXX: those are NOT full functions... FUCK THIS S!*$
-    #   [ [ "ENTRY_NODE_ID", "EXIT_NODE_IDS", "NODES", "LOOPS" ],
-    #     [ 4, [ 4, 5, 6, 7 ],
-    #       [ [ "NODE_ID", "IDOM_NODE_ID" ],
-    #         [ 4, 4 ], ...
-    #       ]]
-    #     [ 63, [ 65, 67 ], ... ]
-    #   ]
+    # "ROUTINES" :  // XXX: no more SDE -> reverse engineer from symbols
+    #  ...
     # ENTRY_NODE_ID : first block of a function
     # NODES : list of all blocks belonging to same function (and their
     #         immediate dominators)
-    for fn in sde_image_data['ROUTINES'][1:]:
-        # some have the "LOOPS" array, while others don't
-        if len(fn) == 4:
-            ENTRY_NODE_ID, EXIT_NODE_IDS, NODES, _ = fn
-        else:
-            ENTRY_NODE_ID, EXIT_NODE_IDS, NODES = fn
-        routines[ENTRY_NODE_ID] = sorted([nid for nid, _ in NODES[1:]],
-                                         reverse=False)
+
+    rev_map = {}
+    # first find all 'first blocks'
+    for bid, bb_data in bb.items():
+        for sy_os, sy_data in symbols.items():
+            if int(sy_data['Offset'], 16) == bb_data['FuncOffset']:
+                print('setting', bid, bb_data, sy_os, sy_data)
+                routines[bid] = [bid]
+                rev_map[int(sy_data['Offset'], 16)] = bid
+    if 139906446259479 in bb: print('mofo is there too', bb[139906446259479])
+    # and then assign the rest
+    for bid, bb_data in bb.items():
+        for sy_os, sy_data in symbols.items():
+            print(bid, bb_data, sy_os, sy_data)
+            if int(bb_data['Offset'], 16) > int(sy_data['Offset'], 16) and \
+                    int(bb_data['Offset'], 16) < int(sy_data['Offset'], 16) + sy_data['Size']:
+                routines[rev_map[int(sy_data['Offset'], 16)]].append(bid)
+    # sort the result
+    for r_data in routines.values():
+        r_data.sort(reverse=False)
 
 
 def _parse_EDGES(sde_edge_data=None, edges=None):
@@ -1976,18 +2037,18 @@ def main():
     if args.get('__load_objdump__') is not None:
         assert(path.isfile(path.realpath(args.get('__load_objdump__'))))
 
+    arch = args.get('__cpu_arch__')
+    if arch is None:
+        arch = get_cpu_arch()
+    assert(arch in KNOWN_ARCHS)
+
     sde_data = {'BasicBlocks': {}}
     parse_SDE_JSON(args, sde_data)
-    print(sde_data)
     #parse_SDE_BB(args, sde_data['BasicBlocks'])
     exit
 
     data, mapper = convert_sde_data_to_something_usable(sde_data)
     del sde_data
-
-    if args.get('__cpu_arch__') is None:
-        arch = get_cpu_arch()
-    assert(arch in KNOWN_ARCHS)
 
     simulate_cycles_with_LLVM_MCA(data, mapper, arch, args.get('__keep__'))
     #second_opinion_from_other_tools(data, mapper, arch, args.get('__keep__'))
