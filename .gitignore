@@ -23,6 +23,7 @@ GTAGS
 /*.bb
 /*.json
 /*.json.bz2
+/misc/libdpm.*
 /stream
 /sum
 /json-c-inst/

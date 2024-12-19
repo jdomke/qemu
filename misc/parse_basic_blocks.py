@@ -7,6 +7,7 @@
 
 from os import path, getpid, remove, environ
 from sys import exit
+from platform import uname
 from bz2 import open as bz2open
 from json import dumps as jsondumps     # TODO: take this out
 from json import loads as jsonloads
@@ -62,11 +63,12 @@ def _get_OBJDUMP_ASSEMBLY(sde_files=None):
 
     for fid in sde_files:
         FILE_NAME = sde_files[fid]
-
         objdp_asm[fid] = {'File': FILE_NAME, 'FileID': fid, 'FNs': {}, 'LO': 0}
 
         # ignore kernel lib
-        if FILE_NAME == '[vdso]' or not path.exists(FILE_NAME):
+        #if FILE_NAME == '[vdso]' or not path.exists(FILE_NAME):
+        if (FILE_NAME.startswith('[') and FILE_NAME.endswith(']')) \
+                or not path.exists(FILE_NAME):
             print('WRN 01: skipping missing file %s' % FILE_NAME)
             continue
 
@@ -306,6 +308,10 @@ def _parse_FILE_NAMES(sde_bb_json=None):
     #     [ 2, "\/usr\/joe\/src\/misc\/hello-world" ],
     #     [ 5, "\/lib64\/libgcc_s.so" ], ...
     #   ]
+    vdso = path.join('/lib', 'modules', uname().release, 'vdso', 'vdso64.so')
+    for i in range(len(sde_bb_json['FILE_NAMES'])):
+        fid, FILE_NAME = sde_bb_json['FILE_NAMES'][i]
+        if FILE_NAME == '[vdso]': sde_bb_json['FILE_NAMES'][i] = [fid, vdso]
     return dict(sde_bb_json['FILE_NAMES'][1:])
 
 
@@ -360,8 +366,10 @@ def _parse_PROCESSES(sde_bb_json=None, sde_files=None, objdp_asm=None):
         sde_procs[PROCESS_ID] = {'FileIDs': {}, 'Edges': {}}
         for _, LOAD_ADDR, _, IMAGE_DATA in PROCESS_DATA['IMAGES'][1:]:
             fid = IMAGE_DATA['FILE_NAME_ID']
-            if sde_files[fid] == '[vdso]':
-                _add_fake_vdso_info_to_asm(IMAGE_DATA, objdp_asm[fid]['FNs'])
+            #if sde_files[fid] == '[vdso]':
+            #    _add_fake_vdso_info_to_asm(IMAGE_DATA, objdp_asm[fid]['FNs'])
+            if sde_files[fid] == '[vvar]' or sde_files[fid] == '[vsyscall]':
+                _add_fake_vstuff_info_to_asm(IMAGE_DATA, objdp_asm[fid]['FNs'])
 
             _, symbols, _, bb, rout = _parse_IMAGE_DATA(IMAGE_DATA, sde_files,
                                                         objdp_asm[fid]['FNs'])
@@ -423,11 +431,13 @@ def _parse_SYMBOLS(sde_image_data=None, sde_files=None, objdp_asm=None, symbols=
     #   0000000000adbe70 00000000000000f2 W mallinfo
     #   0000000000ad9ce0 00000000000000d6 T malloc
 
+    FILE_NAME = sde_files[sde_image_data['FILE_NAME_ID']]
+    if (FILE_NAME.startswith('[') and FILE_NAME.endswith(']')):
+        return
+
     elf_part = compile(r'^\s*LOAD\s+\w+\s+(\w+)\s+\w+\s+\w+\s+\w+\s+R\s+E\s+\w+$')
     # get the stupid load address first -> hit on first find of 'LOAD'
-    p = run(['llvm-readelf',
-             '--program-headers',
-             sde_files[sde_image_data['FILE_NAME_ID']]], stdout=PIPE)
+    p = run(['llvm-readelf', '--program-headers', FILE_NAME], stdout=PIPE)
     load_os = None
     for line in p.stdout.decode().splitlines():
         if elf_part.match(line):
@@ -443,7 +453,7 @@ def _parse_SYMBOLS(sde_image_data=None, sde_files=None, objdp_asm=None, symbols=
              '--numeric-sort',
              '--demangle',
              '--print-size',
-             sde_files[sde_image_data['FILE_NAME_ID']]], stdout=PIPE)
+             FILE_NAME], stdout=PIPE)
 
     for line in p.stdout.decode().splitlines():
         if sym_part.match(line):
@@ -460,7 +470,7 @@ def _parse_SYMBOLS(sde_image_data=None, sde_files=None, objdp_asm=None, symbols=
     p = run(['llvm-objdump',
              '--section=.plt',
              '--section-headers',
-             sde_files[sde_image_data['FILE_NAME_ID']]], stdout=PIPE)
+             FILE_NAME], stdout=PIPE)
 
     for line in p.stdout.decode().splitlines():
         if plt_part.match(line):
@@ -471,6 +481,10 @@ def _parse_SYMBOLS(sde_image_data=None, sde_files=None, objdp_asm=None, symbols=
             symbols[OFFSET] = {'Func': NAME, 'Size': SIZE,
                                'Offset': '0x' + format(OFFSET, 'x')}
     #for s in symbols: print('jj s:',symbols[s])
+
+
+def _add_fake_vstuff_info_to_asm(sde_image_data=None, objdp_asm=None):
+    assert(isinstance(sde_image_data, dict) and isinstance(objdp_asm, dict))
 
 
 def _add_fake_vdso_info_to_asm(sde_image_data=None, objdp_asm=None):

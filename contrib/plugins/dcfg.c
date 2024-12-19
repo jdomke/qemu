@@ -50,7 +50,7 @@ static GRWLock bblock_htable_lock;
 
 static char *out_prefix;
 
-static void file_names_mapping_to_json(json_object *);
+static void file_names_mapping_to_json(pid_t,json_object *);
 static void edge_types_mapping_to_json(json_object *);
 static void special_nodes_mapping_to_json(json_object *);
 static void symbol_data_mapping_to_json(uint64_t, json_object *);
@@ -63,7 +63,7 @@ static void image_data_mapping_to_json(uint64_t, uint64_t, uint64_t,
 static void images_mapping_to_json(pid_t, json_object *);
 static void edges_mapping_to_json(json_object *);
 static void process_data_mapping_to_json(pid_t, json_object *);
-static void processes_mapping_to_json(json_object *);
+static void processes_mapping_to_json(pid_t, json_object *);
 static void bbgraph_to_json(FILE *);
 static void compress_json_to_bz2(json_object *, FILE *);
 
@@ -100,7 +100,7 @@ static void compress_json_to_bz2(json_object *json_obj, FILE *json_out_fd)
     g_assert(bzerror == BZ_OK);
 }
 
-static void file_names_mapping_to_json(json_object *file_names)
+static void file_names_mapping_to_json(pid_t pid, json_object *file_names)
 {
     g_assert(json_object_is_type(file_names, json_type_array));
 
@@ -117,10 +117,10 @@ static void file_names_mapping_to_json(json_object *file_names)
     json_object_array_add(fn_obj, json_object_new_string("FILE_NAME"));
     json_object_array_add(file_names, fn_obj);
 
-    pid_t pid = getpid();
-    char pidmap_filename[128];
-    snprintf(pidmap_filename, sizeof(pidmap_filename), "/proc/%d/maps", pid);
-    FILE *pidmap_file = fopen(pidmap_filename, "r");
+    //char pidmap_filename[128];
+    //snprintf(pidmap_filename, sizeof(pidmap_filename), "/proc/%d/maps", pid);
+    //FILE *pidmap_file = fopen(pidmap_filename, "r");
+    FILE *pidmap_file = fopen(g_strdup_printf("/tmp/%d.dpm", pid), "r");
     g_assert(pidmap_file);
 
     char line[128+(128+256)];
@@ -133,7 +133,7 @@ static void file_names_mapping_to_json(json_object *file_names)
         if (sscanf(line, "%lx-%lx %4s %8s %5s %10s %255s",
                    &start, &end, perms, offset, dev, inode, filepath) >= 6) {
             //fprintf(stderr, "%s", line);
-            if ((perms[0] == 'r' && perms[1] != 'w'
+            if ((perms[0] == 'r' && perms[1] != 'w' && perms[2] == 'x'
                  && 0 < atol(inode) && prev_inode != atol(inode))
                 || NULL != strstr(filepath, "[vdso]")
                 || NULL != strstr(filepath, "[vvar]")
@@ -399,9 +399,10 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
      *    [ 2, "0x2aaaaaaab000", 1166728, {...} ]
      *  ]
      */
-    char pidmap_filename[128], load_addr[32];
-    snprintf(pidmap_filename, sizeof(pidmap_filename), "/proc/%d/maps", pid);
-    FILE *pidmap_file = fopen(pidmap_filename, "r");
+    //char pidmap_filename[128];
+    //snprintf(pidmap_filename, sizeof(pidmap_filename), "/proc/%d/maps", pid);
+    //FILE *pidmap_file = fopen(pidmap_filename, "r");
+    FILE *pidmap_file = fopen(g_strdup_printf("/tmp/%d.dpm", pid), "r");
     g_assert(pidmap_file);
 
     json_object *im_obj = json_object_new_array_ext(4), *imdata_obj = NULL;
@@ -411,7 +412,7 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
     json_object_array_add(im_obj, json_object_new_string("IMAGE_DATA"));
     json_object_array_add(images, im_obj);
 
-    char line[128+(128+256)];
+    char line[128+(128+256)], load_addr[32];;
     uint64_t start, end, prev_inode = 0;
     char perms[5], offset[9], dev[6], inode[11];
     char filepath[128+256];
@@ -420,7 +421,7 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
         // parse the line for start, end, permissions, offset, etc.
         if (sscanf(line, "%lx-%lx %4s %8s %5s %10s %255s",
                    &start, &end, perms, offset, dev, inode, filepath) >= 6) {
-            if ((perms[0] == 'r' && perms[1] != 'w'
+            if ((perms[0] == 'r' && perms[1] != 'w' && perms[2] == 'x'
                  && 0 < atol(inode) && prev_inode != atol(inode))
                 || NULL != strstr(filepath, "[vdso]")
                 || NULL != strstr(filepath, "[vvar]")
@@ -455,6 +456,7 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
         }
     }
 
+    remove(g_strdup_printf("/tmp/%d.dpm", pid));
     fclose(pidmap_file);
 }
 
@@ -543,7 +545,7 @@ static void process_data_mapping_to_json(pid_t pid, json_object *process_data)
     json_object_object_add(process_data, "EDGES", edges_obj);
 }
 
-static void processes_mapping_to_json(json_object *processes)
+static void processes_mapping_to_json(pid_t pid, json_object *processes)
 {
     g_assert(json_object_is_type(processes, json_type_array));
 
@@ -560,7 +562,6 @@ static void processes_mapping_to_json(json_object *processes)
     json_object_array_add(processes, p_obj);
 
     p_obj = json_object_new_array_ext(2);
-    pid_t pid = getpid();
     json_object *pd_obj = json_object_new_object();
     process_data_mapping_to_json(pid, pd_obj);
     json_object_array_add(p_obj, json_object_new_uint64(pid));
@@ -586,6 +587,7 @@ static void bbgraph_to_json(FILE *json_out_fd)
      */
     // Create a new JSON object (an empty object {})
     json_object *bbgraph_json = json_object_new_object();
+    pid_t pid = getpid();
 
     json_object_object_add(
         bbgraph_json, "MAJOR_VERSION", json_object_new_uint64(0));
@@ -593,7 +595,7 @@ static void bbgraph_to_json(FILE *json_out_fd)
         bbgraph_json, "MINOR_VERSION", json_object_new_uint64(1));
 
     json_object *FILE_NAMES = json_object_new_array();
-    file_names_mapping_to_json(FILE_NAMES);
+    file_names_mapping_to_json(pid, FILE_NAMES);
     json_object_object_add(bbgraph_json, "FILE_NAMES", FILE_NAMES);
 
     json_object *EDGE_TYPES = json_object_new_array();
@@ -605,7 +607,7 @@ static void bbgraph_to_json(FILE *json_out_fd)
     json_object_object_add(bbgraph_json, "SPECIAL_NODES", SPECIAL_NODES);
 
     json_object *PROCESSES = json_object_new_array();
-    processes_mapping_to_json(PROCESSES);
+    processes_mapping_to_json(pid, PROCESSES);
     json_object_object_add(bbgraph_json, "PROCESSES", PROCESSES);
 
     // Compress and write the JSON object to file
@@ -647,7 +649,7 @@ static void vcpu_tb_branched_exec(unsigned int vcpu_idx, void *udata)
 
     /* return early for first block */
     if (!previous_bb_id)
-	return;
+        return;
 
     g_rw_lock_reader_lock(&bblock_htable_lock);
 
@@ -666,10 +668,10 @@ static void vcpu_tb_branched_exec(unsigned int vcpu_idx, void *udata)
     /* ...if we've never seen this before, then allocate a new entry */
     if (!e_data) {
         EdgeData_t new_edge = { .dst_bb_id = current_bb_id };
-	g_array_append_val(prev_bb_edges_list, new_edge);
-	e_data = &g_array_index(prev_bb_edges_list, EdgeData_t, prev_bb_edges_list->len - 1);
-	g_assert(e_data->dst_bb_id == current_bb_id);
-	e_data->count = qemu_plugin_scoreboard_new(sizeof(uint64_t));
+        g_array_append_val(prev_bb_edges_list, new_edge);
+        e_data = &g_array_index(prev_bb_edges_list, EdgeData_t, prev_bb_edges_list->len - 1);
+        g_assert(e_data->dst_bb_id == current_bb_id);
+        e_data->count = qemu_plugin_scoreboard_new(sizeof(uint64_t));
     }
     qemu_plugin_u64_add(qemu_plugin_scoreboard_u64(e_data->count), vcpu_idx, 1);
 
@@ -685,17 +687,18 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     struct qemu_plugin_insn *last_insn = qemu_plugin_tb_get_insn(tb, bb_n_insns - 1);
     uint64_t bb_id = bb_pc ^ bb_n_insns;
 
-//    fprintf(stderr, "bb_pc=0x%"PRIx64"\n", bb_pc);
+    //fprintf(stderr, "bb_pc=0x%"PRIx64"\n", bb_pc);
 
     g_assert(bb_pc == qemu_plugin_insn_vaddr(first_insn)); //FIXME: true ????
 
     g_rw_lock_writer_lock(&bblock_htable_lock);
     bb = g_hash_table_lookup(bblock_htable, (gconstpointer)bb_id);
     if (!bb) {
+        //fprintf(stderr, "bb %lu %lu 0x%"PRIx64" %s (%s)\n", bb_id, qemu_plugin_insn_size(first_insn), qemu_plugin_insn_vaddr(first_insn), qemu_plugin_insn_disas(first_insn), qemu_plugin_insn_symbol(first_insn));
         bb = g_new(Bblock_t, 1);
         g_assert(bb);
-	g_rw_lock_init(&(bb->lock));
-	bb->bb_id = bb_id;
+        g_rw_lock_init(&(bb->lock));
+        bb->bb_id = bb_id;
         bb->table_idx = g_hash_table_size(bblock_htable);
         bb->vaddr = bb_pc;
         //for (bb->size = 0, int insn = 0; insn < bb_n_insns; insn++) bb->size += qemu_plugin_insn_size(qemu_plugin_tb_get_insn(tb, insn))

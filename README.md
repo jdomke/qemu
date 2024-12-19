@@ -29,10 +29,16 @@ make -j$(nproc) all  2>&1 |tee -a build.log
 cd -
 ```
 
+# Build destructor (run after app's main) to dump /proc/self/maps
+```
+bash -c "source ~/llvm-v19.1.4/init.sh; rm -f misc/libdpm.*; clang misc/dump_proc_maps.c -c -o dpm.o; ar rcs misc/libdpm.a dpm.o; rm -f dpm.o; clang misc/dump_proc_maps.c -c -fPIC -o dpm.o; clang dpm.o -shared -o misc/libdpm.so; rm -f dpm.o"
+```
+
+
 # Build guest applications (e.g. stream)
 ```
-bash -c "source ~/llvm-v19.1.4/init.sh; clang -o sum ./misc/sum.c -O0 -static"
-bash -c "source ~/llvm-v19.1.4/init.sh; clang -o stream ./misc/stream.c -fopenmp -DSTREAM_ARRAY_SIZE=1024 -DTUNED"
+bash -c "source ~/llvm-v19.1.4/init.sh; clang -o sum ./misc/sum.c -O0 -static -L./misc -Wl,-rpath=./misc -Wl,--whole-archive -ldpm -Wl,--no-whole-archive"
+bash -c "source ~/llvm-v19.1.4/init.sh; clang -o stream ./misc/stream.c -fopenmp -DSTREAM_ARRAY_SIZE=1024 -DTUNED -L./misc -Wl,-rpath=./misc -Wl,--whole-archive -ldpm -Wl,--no-whole-archive"
 ```
 
 # Exec bbv plugin to test functionality
