@@ -133,8 +133,20 @@ static void file_names_mapping_to_json(json_object *file_names)
         if (sscanf(line, "%lx-%lx %4s %8s %5s %10s %255s",
                    &start, &end, perms, offset, dev, inode, filepath) >= 6) {
             //fprintf(stderr, "%s", line);
-            if (perms[0] == 'r' && perms[1] != 'w'
-                && 0 < atol(inode) && prev_inode != atol(inode)) {
+            if ((perms[0] == 'r' && perms[1] != 'w'
+                 && 0 < atol(inode) && prev_inode != atol(inode))
+                || NULL != strstr(filepath, "[vdso]")
+                || NULL != strstr(filepath, "[vvar]")
+                || NULL != strstr(filepath, "[vsyscall]")) {
+                if (0 == atol(inode)) {
+                    if (NULL != strstr(filepath, "[vdso]"))
+                        inode[0] = '1';
+                    if (NULL != strstr(filepath, "[vvar]"))
+                        inode[0] = '2';
+                    if (NULL != strstr(filepath, "[vsyscall]"))
+                        inode[0] = '3';
+                    inode[1] = '\0';
+                }
                 //fprintf(stderr,
                 //        "start: 0x%lx, end: 0x%lx, perm: %s, path: %s\n",
                 //        start, end, perms, filepath);
@@ -402,14 +414,26 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
     char line[128+(128+256)];
     uint64_t start, end, prev_inode = 0;
     char perms[5], offset[9], dev[6], inode[11];
-    char filename[128+256];
+    char filepath[128+256];
 
     while (fgets(line, sizeof(line), pidmap_file)) {
         // parse the line for start, end, permissions, offset, etc.
         if (sscanf(line, "%lx-%lx %4s %8s %5s %10s %255s",
-                   &start, &end, perms, offset, dev, inode, filename) >= 6) {
-            if (perms[0] == 'r' && perms[1] != 'w'
-                && 0 < atol(inode) && prev_inode != atol(inode)) {
+                   &start, &end, perms, offset, dev, inode, filepath) >= 6) {
+            if ((perms[0] == 'r' && perms[1] != 'w'
+                 && 0 < atol(inode) && prev_inode != atol(inode))
+                || NULL != strstr(filepath, "[vdso]")
+                || NULL != strstr(filepath, "[vvar]")
+                || NULL != strstr(filepath, "[vsyscall]")) {
+                if (0 == atol(inode)) {
+                    if (NULL != strstr(filepath, "[vdso]"))
+                        inode[0] = '1';
+                    if (NULL != strstr(filepath, "[vvar]"))
+                        inode[0] = '2';
+                    if (NULL != strstr(filepath, "[vsyscall]"))
+                        inode[0] = '3';
+                    inode[1] = '\0';
+                }
 
                 // Create a new JSON object for this mapping
                 im_obj = json_object_new_array_ext(4);
