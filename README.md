@@ -57,6 +57,7 @@ python3 -m pip install --user -r misc/requirements.txt
 # Exec block analyzer to get cycles from MCA estimates
 ```
 python3 ./misc/parse_basic_blocks.py --sde_json ./stream.dcfg.json.bz2 --cpu_arch a64fx
+#Note: use -s and -l options to avoid parsing the oject files every time
 ```
 
 # old readme
