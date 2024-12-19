@@ -50,15 +50,13 @@ def _get_OBJDUMP_ASSEMBLY(sde_files=None):
 
     objdp_asm = {}
 
-    fn_elf_part = compile(r'^\s*LOAD\s+\w+\s+(\w+)\s+\w+\s+\w+\s+\w+\s+R\s+E\s+\w+$')
+    elf_part = compile(r'^\s*LOAD\s+\w+\s+(\w+)\s+\w+\s+\w+\s+\w+\s+R\s+E\s+\w+$')
+    nm_part = compile(r'^(\w+)\s+(\w+)\s+[A-Za-z]\s+(.*)$')
     # offset, fn name
-    #fn_hdr = compile(r'^(\w+)\s+<(.+)>\s+\(File\s+Offset:\s+(\w+)\):$')
     fn_hdr = compile(r'^(\w+)\s+<(.+)>:$')
     # offset, instruction (+comment)
-    #fn_asm_part = compile(r'^\s+(\w+):\s+([\.\(]?\w{2,}.*)$')
     fn_asm_part = compile(r'^\s+(\w+):\s+([\.\(]?\w{1,}.*)$')
-    fn_asm_igno = compile(
-        r'^(.*)\s+(<.*>)\s+\(\s*(File\s+Offset:\s+)(\w+)\s*\)$')
+    fn_asm_igno = compile(r'^(.*)\s+(<.*>)$')
     __trash__ = compile(
         r'^$|^.*:\s+file format elf.*$|^Disassembly.*$|^\s+#.*|^Sections.*|^Idx .*|^\s*\w+\s+.*\w+\s+\w+.*|^Program .*|^Dynamic .*|^\s+SONAME .*|^\s+NEEDED .*|^\s+[A-Z_\d]+\s+\w+|^Version .*|^.* GLIBC_.*|^\d+\s+\w+\s+\w+\s+.*')
 
@@ -76,10 +74,39 @@ def _get_OBJDUMP_ASSEMBLY(sde_files=None):
         p = run(['llvm-readelf', '--program-headers', FILE_NAME], stdout=PIPE)
         load_os = None
         for line in p.stdout.decode().splitlines():
-            if fn_elf_part.match(line):
-                load_os = int(fn_elf_part.match(line).group(1).strip(), 16)
+            if elf_part.match(line):
+                load_os = int(elf_part.match(line).group(1).strip(), 16)
                 break
         assert(load_os is not None)
+
+        #XXX: objdump may not show all the symbols (eg libc.so.6 only has a
+        #     bit .text blob :-( so we first check nm and extract the asm from
+        #     start to stop address and then do 2nd pass to find what's missing
+        #TODO: ...this takes now much longer to parse the asm dumps, SHIT!
+
+        p = run(['llvm-nm',
+                 '--defined-only',
+                 '--no-weak',
+                 '--demangle',
+                 '--print-size',
+                 '--numeric-sort',
+                 FILE_NAME], stdout=PIPE)
+
+        for line in p.stdout.decode().splitlines():
+            if nm_part.match(line):
+                nm = nm_part.match(line)
+
+                fn_os, fn_size, fn_name = int(nm.group(1).strip(), 16), \
+                    int(nm.group(2).strip(), 16), nm.group(3).strip()
+                if fn_size < 1 or fn_os < load_os: continue
+
+                curr_fn_os = fn_os - load_os
+                os_str = '0x' + format(curr_fn_os, 'x')
+
+                objdp_asm[fid]['FNs'][curr_fn_os] = {
+                    'Offset': os_str,
+                    'Func': fn_name,
+                    'ASM': _get_single_block_from_OBJDUMP(FILE_NAME, curr_fn_os, fn_size, load_os)}
 
         # get objdump for each file (main binary and all shared libs)
         p = run(['llvm-objdump',
@@ -89,7 +116,7 @@ def _get_OBJDUMP_ASSEMBLY(sde_files=None):
                  '--no-show-raw-insn',
                  FILE_NAME], stdout=PIPE)
 
-        curr_fn_os, _ = None, None
+        curr_fn_os, skip = None, False
         for line in p.stdout.decode().splitlines():
             if fn_hdr.match(line):
 
@@ -113,32 +140,38 @@ def _get_OBJDUMP_ASSEMBLY(sde_files=None):
                 curr_fn_os = int(fn_os, 16) - load_os
                 os_str = '0x' + format(curr_fn_os, 'x')
 
+                if curr_fn_os in objdp_asm[fid]['FNs']:
+                    skip = True
+                    continue
+                else:
+                    skip = False
+
                 objdp_asm[fid]['FNs'][curr_fn_os] = {'Offset': os_str,
                                                      'Func': fn_name,
                                                      'ASM': []}
             elif fn_asm_part.match(line):
+                if skip: continue
+
                 assert(curr_fn_os is not None)
 
                 fn = fn_asm_part.match(line)
                 fn_asm_os, fn_asm_in = fn.group(1).strip(), fn.group(2).strip()
                 # FIXME: strip comments at end as well??? => yes, llvm confused
                 if fn_asm_igno.match(fn_asm_in):
-                    instr, func, file_os, addr = \
+                    instr, func = \
                         fn_asm_igno.match(fn_asm_in).group(1), \
-                        fn_asm_igno.match(fn_asm_in).group(2), \
-                        fn_asm_igno.match(fn_asm_in).group(3), \
-                        fn_asm_igno.match(fn_asm_in).group(4)
+                        fn_asm_igno.match(fn_asm_in).group(2)
                     # mca doesn't like jump addresses without 0x, and jmpq is
                     # worse requiring a *0x before the address ... snowflakes
                     if instr.startswith('jmpq'):
                         prefix = '*0x'
                     else:
                         prefix = '0x'
-                    instr = sub(r'(\s+)(%x)' % (load_os + int(addr, 16)),
-                                r'\g<1>%s\g<2>' % prefix, instr,
-                                count=0, flags=IGNORECASE)
+                    #instr = sub(r'(\s+)(%x)' % (load_os + int(addr, 16)),
+                    #            r'\g<1>%s\g<2>' % prefix, instr,
+                    #            count=0, flags=IGNORECASE)
                     # and add '#' before meaning data
-                    fn_asm_in = '%s #%s (%s %s)' % (instr, func, file_os, addr)
+                    fn_asm_in = '%s %s' % (instr, func.replace('>',''))
                 # XXX handle exceptions:
                 # llvm hates: `bnd jmpq *%r11`, check llvm-objdump to replace
                 fn_asm_in = sub(r'^bnd\s+jmpq', r'repne\njmpq', fn_asm_in,
@@ -188,9 +221,8 @@ def _get_single_block_from_OBJDUMP(sde_file=None, from_addr=None,
         return [['0x' + format(x, 'x'), 'nop']
                 for x in range(start_addr, start_addr + num_byte)]
 
-    fn_asm_part = compile(r'^\s+(\w+):\s+([\w\(\.].*)$')
-    fn_asm_igno = compile(
-        r'^(.*)\s+(<.*>)\s+\(\s*(File\s+Offset:\s+)(\w+)\s*\)$')
+    fn_asm_part = compile(r'^\s+(\w+):\s+([\.\(]?\w{1,}.*)$')
+    fn_asm_igno = compile(r'^(.*)\s+(<.*>)$')
 
     # open interval [.,.), so --stop-address=0x... is excluded from output
     p = run(['llvm-objdump',
@@ -200,7 +232,7 @@ def _get_single_block_from_OBJDUMP(sde_file=None, from_addr=None,
              '--no-show-raw-insn',
              '--start-address=0x' + format(start_addr, 'x'),
              '--stop-address=0x' + format(start_addr + num_byte, 'x'),
-             sde_file], stdout=PIPE)
+             sde_file], stdout=PIPE, stderr=PIPE)
 
     for line in p.stdout.decode().splitlines():
         if fn_asm_part.match(line):
@@ -208,22 +240,20 @@ def _get_single_block_from_OBJDUMP(sde_file=None, from_addr=None,
             fn_asm_os, fn_asm_in = fn.group(1).strip(), fn.group(2).strip()
             # FIXME: strip comments at end as well??? => yes, llvm confused
             if fn_asm_igno.match(fn_asm_in):
-                instr, func, file_os, addr = \
+                instr, func = \
                     fn_asm_igno.match(fn_asm_in).group(1), \
-                    fn_asm_igno.match(fn_asm_in).group(2), \
-                    fn_asm_igno.match(fn_asm_in).group(3), \
-                    fn_asm_igno.match(fn_asm_in).group(4)
+                    fn_asm_igno.match(fn_asm_in).group(2)
                 # mca doesn't like jump addresses without 0x, and jmpq is
                 # worse requiring a *0x before the address ... snowflakes
                 if instr.startswith('jmpq'):
                     prefix = '*0x'
                 else:
                     prefix = '0x'
-                instr = sub(r'(\s+)(%x)' % (load_os + int(addr, 16)),
-                            r'\g<1>%s\g<2>' % prefix, instr,
-                            count=0, flags=IGNORECASE)
+                #instr = sub(r'(\s+)(%x)' % (load_os + int(addr, 16)),
+                #            r'\g<1>%s\g<2>' % prefix, instr,
+                #            count=0, flags=IGNORECASE)
                 # and add '#' before meaning data
-                fn_asm_in = '%s #%s (%s %s)' % (instr, func, file_os, addr)
+                fn_asm_in = '%s %s' % (instr, func.replace('>',''))
             # XXX handle exceptions:
             # llvm hates: `bnd jmpq *%r11`, check llvm-objdump to replace
             fn_asm_in = sub(r'bnd\s+jmpq', r'repne\njmpq', fn_asm_in,
@@ -244,6 +274,10 @@ def _get_single_block_from_OBJDUMP(sde_file=None, from_addr=None,
 
             fn_asm_os = '0x' + format(int(fn_asm_os, 16) - load_os, 'x')
             asm.append([fn_asm_os, fn_asm_in])
+
+    for line in p.stderr.decode().splitlines():
+        if 'no section overlaps the range' in line: continue
+        print(line)
 
     return asm
 
@@ -389,15 +423,15 @@ def _parse_SYMBOLS(sde_image_data=None, sde_files=None, objdp_asm=None, symbols=
     #   0000000000adbe70 00000000000000f2 W mallinfo
     #   0000000000ad9ce0 00000000000000d6 T malloc
 
-    fn_elf_part = compile(r'^\s*LOAD\s+\w+\s+(\w+)\s+\w+\s+\w+\s+\w+\s+R\s+E\s+\w+$')
+    elf_part = compile(r'^\s*LOAD\s+\w+\s+(\w+)\s+\w+\s+\w+\s+\w+\s+R\s+E\s+\w+$')
     # get the stupid load address first -> hit on first find of 'LOAD'
     p = run(['llvm-readelf',
              '--program-headers',
              sde_files[sde_image_data['FILE_NAME_ID']]], stdout=PIPE)
     load_os = None
     for line in p.stdout.decode().splitlines():
-        if fn_elf_part.match(line):
-            load_os = int(fn_elf_part.match(line).group(1).strip(), 16)
+        if elf_part.match(line):
+            load_os = int(elf_part.match(line).group(1).strip(), 16)
             break
     assert(load_os is not None)
 
@@ -436,7 +470,7 @@ def _parse_SYMBOLS(sde_image_data=None, sde_files=None, objdp_asm=None, symbols=
             if OFFSET < 0: continue
             symbols[OFFSET] = {'Func': NAME, 'Size': SIZE,
                                'Offset': '0x' + format(OFFSET, 'x')}
-    for s in symbols: print('s:',symbols[s])
+    #for s in symbols: print('jj s:',symbols[s])
 
 
 def _add_fake_vdso_info_to_asm(sde_image_data=None, objdp_asm=None):
@@ -479,7 +513,7 @@ def _parse_BASIC_BLOCKS(sde_image_data=None, sde_files=None, objdp_asm=None,
     # COUNT : total nr of times this block was executed across all threads
     for NODE_ID, ADDR_OFFSET, SIZE, NUM_INSTRS, _, COUNT in sde_image_data[
             'BASIC_BLOCKS'][1:]:
-        print('nnid',NODE_ID)
+        #print('jj nnid',NODE_ID)
         fn_offset = _get_fn_os_for_block(objdp_asm, int(ADDR_OFFSET, 16))
         fn_name = objdp_asm[fn_offset]['Func']
         bb[NODE_ID] = {
@@ -491,7 +525,7 @@ def _parse_BASIC_BLOCKS(sde_image_data=None, sde_files=None, objdp_asm=None,
                   (ADDR_OFFSET, sde_files[sde_image_data['FILE_NAME_ID']]))
             # can happen sometimes, SDE's SYMBOLS list seems incomplete, so
             # we should record the offset just in case we get ID/name later
-    if 139906446259479 in bb: print('mofo is there')
+    #if 139906446259479 in bb: print('jj mofo is there')
 
 
 def _get_fn_os_for_block(objdp_asm=None, bb_offset=None):
@@ -499,6 +533,7 @@ def _get_fn_os_for_block(objdp_asm=None, bb_offset=None):
 
     for fn_offset in sorted(objdp_asm.keys(), reverse=False):
         if bb_offset >= fn_offset and \
+                len(objdp_asm[fn_offset]['ASM']) > 0 and \
                 bb_offset <= int(objdp_asm[fn_offset]['ASM'][-1][0], 16):
             return fn_offset  # objdp_asm[fn_offset]['Func']
     else:
@@ -522,14 +557,14 @@ def _parse_ROUTINES(symbols=None, bb=None, routines=None):
     for bid, bb_data in bb.items():
         for sy_os, sy_data in symbols.items():
             if int(sy_data['Offset'], 16) == bb_data['FuncOffset']:
-                print('setting', bid, bb_data, sy_os, sy_data)
+                #print('jj setting', bid, bb_data, sy_os, sy_data)
                 routines[bid] = [bid]
                 rev_map[int(sy_data['Offset'], 16)] = bid
-    if 139906446259479 in bb: print('mofo is there too', bb[139906446259479])
+    #if 139906446259479 in bb: print('jj mofo is there too', bb[139906446259479])
     # and then assign the rest
     for bid, bb_data in bb.items():
         for sy_os, sy_data in symbols.items():
-            print(bid, bb_data, sy_os, sy_data)
+            #print('jj', bid, bb_data, sy_os, sy_data)
             if int(bb_data['Offset'], 16) > int(sy_data['Offset'], 16) and \
                     int(bb_data['Offset'], 16) < int(sy_data['Offset'], 16) + sy_data['Size']:
                 routines[rev_map[int(sy_data['Offset'], 16)]].append(bid)
@@ -580,6 +615,7 @@ def parse_SDE_JSON(args=None, sde_data=None):
            'PROCESSES' in sde_bb_json)
 
     sde_data['Files'] = _parse_FILE_NAMES(sde_bb_json)
+    #print('jj _parse_FILE_NAMES done', flush=True)
     # first need to get the assembly, from either real files or previous runs
     if args.get('__load_objdump__') is None:
         sde_data['ObjDumpAsm'] = _get_OBJDUMP_ASSEMBLY(sde_data['Files'])
@@ -593,66 +629,16 @@ def parse_SDE_JSON(args=None, sde_data=None):
         exit("INFO: intermediate store of objdump data complete;\n"
              "      rerun with --load_objd %s to complete the workflow"
              % args.get('__store_objdump__'))
+    #print('jj _get_OBJDUMP_ASSEMBLY done', flush=True)
 
     # and then continue with the rest
     sde_data['SpecialBlockIDs'] = _parse_SPECIAL_NODES(sde_bb_json)
+    #print('jj _parse_SPECIAL_NODES done', flush=True)
     sde_data['EdgeTypes'] = _parse_EDGE_TYPES(sde_bb_json)
+    #print('jj _parse_EDGE_TYPES done', flush=True)
     sde_data['Processes'] = _parse_PROCESSES(sde_bb_json, sde_data['Files'],
                                              sde_data['ObjDumpAsm'])
-
-
-def parse_SDE_BB(args=None, sde_bb=None):
-    assert(isinstance(args, dict) and isinstance(sde_bb, dict))
-
-    # EXAMPLE BLOCK:
-    #  BLOCK: 2586 PC: 530 ICOUNT: 14 EXECUTIONS: 1 #BYTES: 81 FN: main IMG: X
-    #  XDIS 530: BASE     55                   push rbp
-    #  XDIS 531: BASE     4889e5               mov rbp, rsp
-    #  XDIS 534: BASE     4883e480             and rsp, 0xffffffffffffff80
-    #  XDIS 538: BASE     4881ec80030000       sub rsp, 0x380
-
-    with bz2open(path.realpath(args.get('__sde_block_f__')), 'rt') as bb_txt:
-        # block number, program counter, #instruction (inst per block * #exec),
-        # #{exec} of this block, #bytes of block, fn the block belongs to,
-        # contained in binary/lib
-        block_hdr = compile(
-            r'^BLOCK:\s+(\d+)\s+PC:\s+(\w+)\s+ICOUNT:\s+(\d+)\s+' +
-            r'EXECUTIONS:\s+(\d+)\s+#BYTES:\s+(\d+)(\s+FN:)?((?(6).*|\s+))' +
-            r'IMG:\s+(.+)$')
-        # program counter, instr.type (like AVX,FMA,etc), hex of instr,
-        # and decoded instr./assembly (as seen by SDE)
-        block_part = compile(r'^XDIS\s+(\w+):\s+(\w+)\s+(\w+)\s+(.*)$')
-        no_block = compile('^$')
-
-        curr_bb = None
-        for line in bb_txt:
-            if block_hdr.match(line):
-                bb = block_hdr.match(line)
-                bb_id, bb_pc, _, bb_ex, _, bb_fi = \
-                    bb.group(1).strip(), bb.group(2).strip(), \
-                    bb.group(3).strip(), bb.group(4).strip(), \
-                    bb.group(5).strip(), bb.group(8).strip()
-                bb_fn = bb.group(6)
-                if bb_fn is not None:
-                    bb_fn = bb.group(7).strip()
-                curr_bb = int(bb_id)
-
-                sde_bb[curr_bb] = {'BlockID': curr_bb, 'ProgCnt': bb_pc,
-                                   'NumExec': bb_ex, 'Func': bb_fn,
-                                   'File': bb_fi, 'ASM': []}
-
-            elif block_part.match(line):
-                bb = block_part.match(line)
-                _, _, _, bb_in = \
-                    bb.group(1).strip(), bb.group(2).strip(), \
-                    bb.group(3).strip(), bb.group(4).strip()
-
-                sde_bb[curr_bb]['ASM'].append(bb_in)
-
-            elif no_block.match(line):
-                continue
-            else:
-                exit('ERR: unknown line: %s' % line)
+    #print('jj _parse_PROCESSES done', flush=True)
 
 
 def _get_helping_mappers(sde_data=None):
@@ -1422,7 +1408,7 @@ def simulate_cycles_with_LLVM_MCA(blockdata=None, mapper=None, arch=None,
     asm_cnt = compile(r'^Instructions:\s+(\d+)$')
     cyc_cnt = compile(r'^Total\s+Cycles:\s+(\d+)$')
     rtp_cnt = compile(r'^Block\s+RThroughput:\s+(\d+)$')
-    tl_pipe = compile(r'^(\[[\d,]+)\]\s+([\.D]+[DReE=\-\.\s]+)\s+([\.\(]?\w{2,}.*)$')
+    tl_pipe = compile(r'^(\[[\d,]+)\]\s+([\.D]+[DReE=\-\.\s]+)\s+([\.\(]?\w{1,}.*)$')
 
     # info from `llvm-mca -mtriple=ARCH-unknown-linux-gnu -mcpu=help /dev/null`
     # ARCH can be x86-64, aarch64, ppc64, sparc[v9] (more: `llvm-mca -version`)
@@ -1443,7 +1429,7 @@ def simulate_cycles_with_LLVM_MCA(blockdata=None, mapper=None, arch=None,
     ARCHS['x86_64'] = ['x86_64', 'x86-64']
     ARCHS['aarch64'] = ['aarch64', 'generic']
     ARCHS['thunderx2'] = ['aarch64', 'thunderx2t99']
-    ARCHS['a64fx'] = ['aarch64', 'generic -mattr=+fp-armv8,+v8.2a,+neon,+sve']
+    ARCHS['a64fx'] = ['aarch64', 'a64fx'] #'generic -mattr=+fp-armv8,+v8.2a,+neon,+sve']
     ARCHS['power7'] = ['ppc64', 'pwr7']
     ARCHS['power8'] = ['ppc64', 'pwr8']
     ARCHS['power9'] = ['ppc64', 'pwr9']
@@ -1552,6 +1538,7 @@ def simulate_cycles_with_LLVM_MCA(blockdata=None, mapper=None, arch=None,
                         tl.group(3).strip()
                     timeline_data.append([index, timeline, asm])
 
+            #if (num_instr != len(timeline_data) and num_instr != icnt * len(timeline_data)): print('jj', num_instr,len(timeline_data))
             assert(num_instr == len(timeline_data)              # merge 2 blk
                    or num_instr == icnt * len(timeline_data))   # self-edge
 
@@ -2006,10 +1993,6 @@ def main():
                             help='name of existing *.dcfg.json.bz2 file',
                             type=str, metavar='<input file>', default=None,
                             required=True)
-    arg_parser.add_argument('-b', '--sde_block', dest='__sde_block_f__',
-                            help='name of existing *.bb.txt.bz2 file',
-                            type=str, metavar='<input file>', default=None,
-                            required=False)
     arg_parser.add_argument('-v', '--vis', dest='__visualize__',
                             help='run dash server and show basic block graph',
                             action='store_true', default=False)
@@ -2032,8 +2015,6 @@ def main():
 
     assert(args.get('__sde_json_f__') is not None
            and path.isfile(path.realpath(args.get('__sde_json_f__'))))
-    assert(args.get('__sde_block_f__') is None
-           or path.isfile(path.realpath(args.get('__sde_block_f__'))))
     if args.get('__load_objdump__') is not None:
         assert(path.isfile(path.realpath(args.get('__load_objdump__'))))
 
@@ -2042,10 +2023,9 @@ def main():
         arch = get_cpu_arch()
     assert(arch in KNOWN_ARCHS)
 
-    sde_data = {'BasicBlocks': {}}
+    sde_data = {}
     parse_SDE_JSON(args, sde_data)
-    #parse_SDE_BB(args, sde_data['BasicBlocks'])
-    exit
+    #print('jj', sde_data)
 
     data, mapper = convert_sde_data_to_something_usable(sde_data)
     del sde_data
@@ -2087,29 +2067,29 @@ def main():
                  total_cycles / (cpufreq.current * pow(10, 6)),
                  total_cycles / (cpufreq.max * pow(10, 6))))
 
-        total_cycles = G.size(weight='iaca_cycles')
-        print('IACA: Total CPU cycles on rank %s and thread ID %s : %s\n'
-              % (0, thread_id, total_cycles) +
-              'IACA: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)'
-              % (total_cycles / (cpufreq.min * pow(10, 6)),
-                 total_cycles / (cpufreq.current * pow(10, 6)),
-                 total_cycles / (cpufreq.max * pow(10, 6))))
+        #total_cycles = G.size(weight='iaca_cycles')
+        #print('IACA: Total CPU cycles on rank %s and thread ID %s : %s\n'
+        #      % (0, thread_id, total_cycles) +
+        #      'IACA: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)'
+        #      % (total_cycles / (cpufreq.min * pow(10, 6)),
+        #         total_cycles / (cpufreq.current * pow(10, 6)),
+        #         total_cycles / (cpufreq.max * pow(10, 6))))
 
-        total_cycles = G.size(weight='uica_cycles')
-        print('uiCA: Total CPU cycles on rank %s and thread ID %s : %s\n'
-              % (0, thread_id, total_cycles) +
-              'uiCA: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)'
-              % (total_cycles / (cpufreq.min * pow(10, 6)),
-                 total_cycles / (cpufreq.current * pow(10, 6)),
-                 total_cycles / (cpufreq.max * pow(10, 6))))
+        #total_cycles = G.size(weight='uica_cycles')
+        #print('uiCA: Total CPU cycles on rank %s and thread ID %s : %s\n'
+        #      % (0, thread_id, total_cycles) +
+        #      'uiCA: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)'
+        #      % (total_cycles / (cpufreq.min * pow(10, 6)),
+        #         total_cycles / (cpufreq.current * pow(10, 6)),
+        #         total_cycles / (cpufreq.max * pow(10, 6))))
 
-        total_cycles = G.size(weight='osaca_cycles')
-        print('OSACA: Total CPU cycles on rank %s and thread ID %s : %s\n'
-              % (0, thread_id, total_cycles) +
-              'OSACA: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)'
-              % (total_cycles / (cpufreq.min * pow(10, 6)),
-                 total_cycles / (cpufreq.current * pow(10, 6)),
-                 total_cycles / (cpufreq.max * pow(10, 6))))
+        #total_cycles = G.size(weight='osaca_cycles')
+        #print('OSACA: Total CPU cycles on rank %s and thread ID %s : %s\n'
+        #      % (0, thread_id, total_cycles) +
+        #      'OSACA: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)'
+        #      % (total_cycles / (cpufreq.min * pow(10, 6)),
+        #         total_cycles / (cpufreq.current * pow(10, 6)),
+        #         total_cycles / (cpufreq.max * pow(10, 6))))
 
         G.clear()
         del G
