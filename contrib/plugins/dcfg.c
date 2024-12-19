@@ -192,6 +192,29 @@ static void special_nodes_mapping_to_json(json_object *special_nodes)
     json_object_array_add(s_obj, json_object_new_string("NODE_ID"));
     json_object_array_add(s_obj, json_object_new_string("NODE_NAME"));
     json_object_array_add(special_nodes, s_obj);
+
+    g_rw_lock_reader_lock(&bblock_htable_lock);
+
+    uint64_t first_bb_id = 0, last_bb_id = qemu_plugin_u64_get(prev_bb_id, 0);
+    GHashTableIter iter;
+    Bblock_t *bb = NULL;
+    g_hash_table_iter_init(&iter, bblock_htable);
+    while (g_hash_table_iter_next(&iter, NULL, (gpointer*)&bb))
+        if (0 == bb->table_idx)
+            first_bb_id = bb->bb_id;
+    g_assert(first_bb_id);
+    g_rw_lock_reader_unlock(&bblock_htable_lock);
+
+    s_obj = json_object_new_array_ext(2);
+    json_object_array_add(s_obj, json_object_new_uint64(first_bb_id));
+    json_object_array_add(s_obj, json_object_new_string("START"));
+    json_object_array_add(special_nodes, s_obj);
+
+    s_obj = json_object_new_array_ext(2);
+    json_object_array_add(s_obj, json_object_new_uint64(last_bb_id));
+    json_object_array_add(s_obj, json_object_new_string("END"));
+    json_object_array_add(special_nodes, s_obj);
+
     s_obj = json_object_new_array_ext(2);
     json_object_array_add(s_obj, json_object_new_uint64(3));
     json_object_array_add(s_obj, json_object_new_string("UNKNOWN"));
