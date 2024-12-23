@@ -1680,6 +1680,9 @@ def build_bb_graph(blockdata=None, mapper=None, thread_id=0):
 
     branches = [[start_bbid, out_edge]
                 for out_edge in blockdata[start_bbid]['out_edges'].keys()]
+    #if thread_id>0:
+    #    print('build_bb_graph', branches)
+    #    exit()
     # build spanning tree
     while len(branches) > 0:
         curr_bbid, next_bbid = branches.pop()
@@ -1688,6 +1691,7 @@ def build_bb_graph(blockdata=None, mapper=None, thread_id=0):
         iter_cnt, cycle_cnt = \
             curr2next_bbid_edge['ThreadExecCnts'][thread_id], \
             curr2next_bbid_edge['CyclesPerIter']
+        if iter_cnt == 0: iter_cnt =1 #XXX TODO XXX QEMU IS MISSING ENTRY FOR THREADS (this is a diry workaround)
         # if edge (curr_bbid->next_bbid) isn't used or filtered for the thread?
         if iter_cnt == 0 \
                 or (isinstance(cycle_cnt, list) and cycle_cnt[0] == 0) \
@@ -1718,6 +1722,9 @@ def build_bb_graph(blockdata=None, mapper=None, thread_id=0):
         branches += [[next_bbid, out_edge]
                      for out_edge in blockdata[next_bbid]['out_edges'].keys()]
 
+    #if thread_id>0:
+    #    print('build_bb_graph', G)
+    #    exit()
     return G
 
 
