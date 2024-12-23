@@ -37,8 +37,14 @@ bash -c "source ~/llvm-v19.1.4/init.sh; rm -f misc/libdpm.*; clang misc/dump_pro
 
 # Build guest applications (e.g. stream)
 ```
-bash -c "source ~/llvm-v19.1.4/init.sh; clang -o sum ./misc/sum.c -O0 -static -L./misc -Wl,-rpath=./misc -Wl,--whole-archive -ldpm -Wl,--no-whole-archive"
-bash -c "source ~/llvm-v19.1.4/init.sh; clang -o stream ./misc/stream.c -fopenmp -DSTREAM_ARRAY_SIZE=1024 -DTUNED -L./misc -Wl,-rpath=./misc -Wl,--whole-archive -ldpm -Wl,--no-whole-archive"
+bash -c "source ~/llvm-v19.1.4/init.sh; clang -o sum ./misc/sum.c -O0 -static -L./misc -Wl,-rpath=\$(pwd)/misc -Wl,--whole-archive -ldpm -Wl,--no-whole-archive"
+bash -c "source ~/llvm-v19.1.4/init.sh; clang -o stream ./misc/stream.c -fopenmp -DSTREAM_ARRAY_SIZE=1024 -DTUNED -L./misc -Wl,-rpath=\$(pwd)/misc -Wl,--whole-archive -ldpm -Wl,--no-whole-archive"
+```
+
+# Build testing/validation set
+```
+mkdir -p misc/polybench; URL="https://downloads.sourceforge.net/project/polybench/polybench-c-4.2.1-beta.tar.gz"; DEP=$(basename $URL); if [ ! -f misc/${DEP} ]; then wget ${URL} -O misc/${DEP}; fi; tar xzf misc/${DEP} -C misc/polybench --strip-components 1
+bash -c "source ~/llvm-v19.1.4/init.sh; cd misc/polybench; for BName in \$(find datamining linear-algebra medley stencils -name '*.c' | /bin/grep -v '\.orig\.'); do clang -O3 -ffast-math -flto=full -I\$(dirname \${BName}) -I./utilities ./utilities/polybench.c \${BName} -DMINI_DATASET -DPOLYBENCH_TIME -o \${BName}.exe -L\$(pwd)/../../misc -Wl,-rpath=\$(pwd)/../../misc -Wl,--whole-archive -ldpm -Wl,--no-whole-archive -static; done; cd -"
 ```
 
 # Exec bbv plugin to test functionality
@@ -65,6 +71,18 @@ python3 -m pip install --user -r misc/requirements.txt
 python3 ./misc/parse_basic_blocks.py --sde_json ./stream.dcfg.json.bz2 --cpu_arch a64fx
 #Note: use -s and -l options to avoid parsing the oject files every time
 ```
+
+# Test DCFG with polybench
+```
+for BName in $(find misc/polybench -name '*.c.exe'); do ./build/qemu-aarch64 \
+	-plugin "build/contrib/plugins/libdcfg.so,outfile=$(basename ${BName}).dcfg" \
+    -d plugin ${BName} 2>&1; done
+for BName in $(find misc/polybench -name '*.c.exe'); do python3 \
+    ./misc/parse_basic_blocks.py \
+    --sde_json "$(basename ${BName}).dcfg.json.bz2" \
+    --cpu_arch a64fx 2>&1 | tee "$(basename ${BName}).dcfg.json.bz2.log"; done
+```
+
 
 # old readme
 [here](README_org.rst)

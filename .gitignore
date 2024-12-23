@@ -24,6 +24,7 @@ GTAGS
 /*.json
 /*.json.bz2
 /misc/libdpm.*
+/misc/polybench*
 /stream
 /sum
 /json-c-inst/

@@ -37,6 +37,12 @@ typedef struct Vcpu_t {
     uint64_t pc_after_bb; /* next pc right after the end of a basicblock */
 } Vcpu_t;
 
+typedef struct Procmap_t {
+    uint64_t inode;
+    uint64_t start;
+    uint64_t end;
+} Procmap_t;
+
 /* descriptors for accessing the above scoreboard */
 static qemu_plugin_u64 n_insn;
 static qemu_plugin_u64 prev_bb_id;
@@ -47,6 +53,9 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 
 static GHashTable *bblock_htable;
 static GRWLock bblock_htable_lock;
+
+static GHashTable *procmap_htable;
+static GRWLock procmap_htable_lock;
 
 static char *out_prefix;
 
@@ -133,8 +142,8 @@ static void file_names_mapping_to_json(pid_t pid, json_object *file_names)
         if (sscanf(line, "%lx-%lx %4s %8s %5s %10s %255s",
                    &start, &end, perms, offset, dev, inode, filepath) >= 6) {
             //fprintf(stderr, "%s", line);
-            if ((perms[0] == 'r' && perms[1] != 'w' && perms[2] == 'x'
-                 && 0 < atol(inode) && prev_inode != atol(inode))
+            if ((/*perms[0] == 'r' && perms[1] != 'w' && perms[2] == 'x'
+                 &&*/ 0 < atol(inode) && prev_inode != atol(inode))
                 || NULL != strstr(filepath, "[vdso]")
                 || NULL != strstr(filepath, "[vvar]")
                 || NULL != strstr(filepath, "[vsyscall]")) {
@@ -303,6 +312,7 @@ static void basic_blocks_mapping_to_json(uint64_t inode,
     char bb_addr[32];
     uint64_t total_exec = 0;
 
+    //if (54612029==inode) fprintf(stderr,"jj: s %"PRIx64" e %"PRIx64"\n",vaddr_start,vaddr_end);
     g_hash_table_iter_init(&iter, bblock_htable);
     while (g_hash_table_iter_next(&iter, NULL, (gpointer*)&bb)) {
         if (bb->vaddr < vaddr_start || bb->vaddr > vaddr_end)
@@ -413,48 +423,70 @@ static void images_mapping_to_json(pid_t pid, json_object *images)
     json_object_array_add(images, im_obj);
 
     char line[128+(128+256)], load_addr[32];;
-    uint64_t start, end, prev_inode = 0;
-    char perms[5], offset[9], dev[6], inode[11];
+    uint64_t start = 0, end = 0, inode = 0;
+    char perms[5], offset[9], dev[6], inode_s[11];
     char filepath[128+256];
 
+    g_rw_lock_writer_lock(&procmap_htable_lock);
+
+    Procmap_t *pm = NULL;
     while (fgets(line, sizeof(line), pidmap_file)) {
         // parse the line for start, end, permissions, offset, etc.
         if (sscanf(line, "%lx-%lx %4s %8s %5s %10s %255s",
-                   &start, &end, perms, offset, dev, inode, filepath) >= 6) {
-            if ((perms[0] == 'r' && perms[1] != 'w' && perms[2] == 'x'
-                 && 0 < atol(inode) && prev_inode != atol(inode))
+                   &start, &end, perms, offset, dev, inode_s, filepath) >= 6) {
+	    inode = atol(inode_s);
+            //fprintf(stderr, "%s", line);
+            if (0 < inode
                 || NULL != strstr(filepath, "[vdso]")
                 || NULL != strstr(filepath, "[vvar]")
                 || NULL != strstr(filepath, "[vsyscall]")) {
-                if (0 == atol(inode)) {
+                if (0 == inode) {
                     if (NULL != strstr(filepath, "[vdso]"))
-                        inode[0] = '1';
+                        inode = 1;
                     if (NULL != strstr(filepath, "[vvar]"))
-                        inode[0] = '2';
+                        inode = 2;
                     if (NULL != strstr(filepath, "[vsyscall]"))
-                        inode[0] = '3';
-                    inode[1] = '\0';
+                        inode = 3;
                 }
 
-                // Create a new JSON object for this mapping
-                im_obj = json_object_new_array_ext(4);
-                // Add key-value pairs to the JSON object
-                json_object_array_add(
-                    im_obj, json_object_new_uint64((prev_inode = atol(inode))));
-                snprintf(load_addr, sizeof(load_addr), "0x%"PRIx64, start);
-                json_object_array_add(
-                    im_obj, json_object_new_string(load_addr));
-                json_object_array_add(
-                    im_obj, json_object_new_uint64(end-start));
-
-                imdata_obj = json_object_new_object();
-                image_data_mapping_to_json(atol(inode), start, end, imdata_obj);
-                json_object_array_add(im_obj, imdata_obj);
-
-                json_object_array_add(images, im_obj);
-            }
-        }
+		pm = g_hash_table_lookup(procmap_htable, (gconstpointer)&inode);
+		if (!pm) {
+		    pm = g_new(Procmap_t, 1);
+		    g_assert(pm);
+		    pm->inode = inode;
+		    pm->start = start;
+		    pm->end = end;
+		    g_hash_table_replace(procmap_htable, (gpointer)&(pm->inode), pm);
+		} else if (pm->end < end) {
+		    pm->end = end;
+		}
+	    }
+	}
     }
+
+    GHashTableIter iter;
+    g_hash_table_iter_init(&iter, procmap_htable);
+    while (g_hash_table_iter_next(&iter, NULL, (gpointer*)&pm)) {
+	inode = pm->inode;
+	start = pm->start;
+	end = pm->end;
+
+	// Create a new JSON object for this mapping
+	im_obj = json_object_new_array_ext(4);
+	// Add key-value pairs to the JSON object
+	json_object_array_add(im_obj, json_object_new_uint64(inode));
+	snprintf(load_addr, sizeof(load_addr), "0x%"PRIx64, start);
+	json_object_array_add(im_obj, json_object_new_string(load_addr));
+	json_object_array_add(im_obj, json_object_new_uint64(end-start));
+
+	imdata_obj = json_object_new_object();
+	image_data_mapping_to_json(inode, start, end, imdata_obj);
+	json_object_array_add(im_obj, imdata_obj);
+
+	json_object_array_add(images, im_obj);
+    }
+
+    g_rw_lock_writer_unlock(&procmap_htable_lock);
 
     remove(g_strdup_printf("/tmp/%d.dpm", pid));
     fclose(pidmap_file);
@@ -653,7 +685,8 @@ static void vcpu_tb_branched_exec(unsigned int vcpu_idx, void *udata)
 
     g_rw_lock_reader_lock(&bblock_htable_lock);
 
-    prev_bb = g_hash_table_lookup(bblock_htable, (gconstpointer)previous_bb_id);
+    //fprintf(stderr, "prev bb id=%lu", previous_bb_id);
+    prev_bb = g_hash_table_lookup(bblock_htable, (gconstpointer)&previous_bb_id);
     g_assert(prev_bb);
 
     g_rw_lock_reader_unlock(&bblock_htable_lock);
@@ -687,12 +720,12 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
     struct qemu_plugin_insn *last_insn = qemu_plugin_tb_get_insn(tb, bb_n_insns - 1);
     uint64_t bb_id = bb_pc ^ bb_n_insns;
 
-    //fprintf(stderr, "bb_pc=0x%"PRIx64"\n", bb_pc);
+    //if (bb_id==80360) fprintf(stderr, "bb_pc=0x%"PRIx64" (%s |in: %s)\n", bb_pc, qemu_plugin_insn_disas(first_insn), qemu_plugin_insn_symbol(first_insn));
 
     g_assert(bb_pc == qemu_plugin_insn_vaddr(first_insn)); //FIXME: true ????
 
     g_rw_lock_writer_lock(&bblock_htable_lock);
-    bb = g_hash_table_lookup(bblock_htable, (gconstpointer)bb_id);
+    bb = g_hash_table_lookup(bblock_htable, (gconstpointer)&bb_id);
     if (!bb) {
         //fprintf(stderr, "bb %lu %lu 0x%"PRIx64" %s (%s)\n", bb_id, qemu_plugin_insn_size(first_insn), qemu_plugin_insn_vaddr(first_insn), qemu_plugin_insn_disas(first_insn), qemu_plugin_insn_symbol(first_insn));
         bb = g_new(Bblock_t, 1);
@@ -707,7 +740,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
         bb->count = qemu_plugin_scoreboard_new(sizeof(uint64_t));               // set to 0 internally
         bb->edges = g_array_new(true, true, sizeof(EdgeData_t));;
         g_array_set_clear_func(bb->edges, free_scoreboard_edge_data);
-        g_hash_table_replace(bblock_htable, (gpointer)bb_id, bb);
+        g_hash_table_replace(bblock_htable, (gpointer)&(bb->bb_id), bb);
     }
     g_rw_lock_writer_unlock(&bblock_htable_lock);
 
@@ -739,6 +772,8 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 
 static void plugin_init(void)
 {
+    procmap_htable = g_hash_table_new_full(g_int64_hash, g_int64_equal, NULL,
+                                           NULL);
     bblock_htable = g_hash_table_new_full(g_int64_hash, g_int64_equal, NULL,
                                           free_scoreboard_bb_data);
 
@@ -760,6 +795,7 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
 
     bbgraph_to_json(json_out_fd);
 
+    g_hash_table_unref(procmap_htable);
     g_hash_table_unref(bblock_htable);
     g_free(out_prefix);
     qemu_plugin_scoreboard_free(processor_state);
