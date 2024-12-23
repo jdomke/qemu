@@ -23,6 +23,7 @@ GTAGS
 /*.bb
 /*.json
 /*.json.bz2
+/*.json.bz2.log
 /misc/libdpm.*
 /misc/polybench*
 /stream

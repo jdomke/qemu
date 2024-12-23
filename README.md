@@ -81,8 +81,16 @@ for BName in $(find misc/polybench -name '*.c.exe'); do python3 \
     ./misc/parse_basic_blocks.py \
     --sde_json "$(basename ${BName}).dcfg.json.bz2" \
     --cpu_arch a64fx 2>&1 | tee "$(basename ${BName}).dcfg.json.bz2.log"; done
+if lscpu | grep 'sve' >/dev/null 2>&1; then
+    for BName in $(find misc/polybench -name '*.c.exe'); do
+        LOG="$(basename ${BName}).dcfg.json.bz2.log"
+        START="$(date +%s.%N)"
+        echo "Kernel runtime: $(${BName})" 2>&1 | tee -a "${LOG}"
+        ENDED="$(date +%s.%N)"
+        echo "Total running time: $(echo "${ENDED} - ${START}" | bc -l)" | tee -a "${LOG}"
+    done
+else echo "ERR: please exec this part on A64FX to get real perf numbers"; fi
 ```
-
 
 # old readme
 [here](README_org.rst)
