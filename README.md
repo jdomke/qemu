@@ -92,5 +92,12 @@ if lscpu | grep 'sve' >/dev/null 2>&1; then
 else echo "ERR: please exec this part on A64FX to get real perf numbers"; fi
 ```
 
+# TODO LIST
+- fix misc/parse\_basic\_blocks.py to handle threads (see line 1694)
+- check simple kernels and visualize (--vis) the BB graph
+- validate/verify with poly(MINI) for aarch64
+- scale down inception to kernels/functions instead of full apps
+
+
 # old readme
 [here](README_org.rst)
