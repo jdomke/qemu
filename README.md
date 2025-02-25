@@ -92,6 +92,25 @@ if lscpu | grep 'sve' >/dev/null 2>&1; then
 else echo "ERR: please exec this part on A64FX to get real perf numbers"; fi
 ```
 
+# Using gcc toolchain instead of clang
+```
+__GNU_DL_VERS__="14.2.rel1"
+__GNU_PREFIX__="aarch64-none-linux-gnu"
+GCCARMVERSION="arm-gnu-toolchain-${__GNU_DL_VERS__}-x86_64-${__GNU_PREFIX__}"
+GCCARMx86URL="https://developer.arm.com/-/media/Files/downloads/gnu/${__GNU_DL_VERS__}/binrel/${GCCARMVERSION}.tar.xz"
+URL="${GCCARMx86URL}"; F="$(basename "${URL}")"
+if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
+tar xf "${F}"
+CROSSTOOLS="$(pwd)/${GCCARMVERSION}"
+CROSSSYSROOT="$CROSSTOOLS/${__GNU_PREFIX__}/libc"
+VECBITS=512	#"scalable"
+CROSSFLAGS="-march=armv8.2-a+sve -mcpu=a64fx -msve-vector-bits=${VECBITS}"
+CROSSFLAGS+=" --sysroot=$CROSSSYSROOT -Wl,-rpath=$CROSSSYSROOT/lib64:$CROSSSYSROOT/usr/lib64 -Wl,-dynamic-linker=$CROSSSYSROOT/lib/ld-linux-aarch64.so.1"
+bash -c "export PATH=$CROSSTOOLS/bin:$PATH; rm -f misc/libdpm.*; ${__GNU_PREFIX__}-gcc $CROSSFLAGS misc/dump_proc_maps.c -c -o dpm.o; ${__GNU_PREFIX__}-ar rcs misc/libdpm.a dpm.o; rm -f dpm.o; ${__GNU_PREFIX__}-gcc $CROSSFLAGS misc/dump_proc_maps.c -c -fPIC -o dpm.o; ${__GNU_PREFIX__}-gcc $CROSSFLAGS dpm.o -shared -o misc/libdpm.so; rm -f dpm.o"
+bash -c "export PATH=$CROSSTOOLS/bin:$PATH; ${__GNU_PREFIX__}-gcc $CROSSFLAGS -o stream ./misc/stream.c -fopenmp -DSTREAM_ARRAY_SIZE=1024 -DTUNED -L./misc -Wl,-rpath=\$(pwd)/misc -Wl,--whole-archive -ldpm -Wl,--no-whole-archive"
+./build/qemu-aarch64 -E OMP_NUM_THREADS=12 -plugin 'build/contrib/plugins/libdcfg.so,outfile=stream.dcfg' -d plugin ./stream
+```
+
 # TODO LIST
 - fix misc/parse\_basic\_blocks.py to handle threads (see line 1694)
 - check simple kernels and visualize (--vis) the BB graph
