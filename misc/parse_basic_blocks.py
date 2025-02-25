@@ -344,7 +344,8 @@ def _parse_PROCESSES(sde_bb_json=None, sde_files=None, objdp_asm=None):
         #         [ 1, "0x400000", 2102216, {...} ],
         #         [ 2, "0x2aaaaaaab000", 1166728, {...} ]
         #       ]
-        sde_procs[PROCESS_ID] = {'FileIDs': {}, 'Edges': {}}
+        sde_procs[PROCESS_ID] = {'FileIDs': {}, 'Edges': {},
+                                 'InstrCntPerThr': PROCESS_DATA['INSTR_COUNT_PER_THREAD']}
         for _, LOAD_ADDR, _, IMAGE_DATA in PROCESS_DATA['IMAGES'][1:]:
             fid = IMAGE_DATA['FILE_NAME_ID']
             #if sde_files[fid] == '[vdso]':
@@ -766,10 +767,14 @@ def _get_helping_mappers(sde_data=None):
                 # more) rpbbIDs belong to same function but the function itself
                 # has no primary block in our list (eg. __cpu_indicator_init)
                 func2fpbb[fid][fpbb2func[fpbb]].append(fpbb)
+    #
+    proc2icnt = {}
+    for pid, pid_data in sde_data['Processes'].items():
+        proc2icnt[pid] = pid_data['InstrCntPerThr']
 
     return (fid2fn, fn2fid, sbid2sbn, sbn2sbid, etid2etn, etn2etid, bbid2pid,
             bbid2fid, offs2bbid, bbid2rpbb, rpbb2fpbb, fpbb2rpbb, func2fpbb,
-            fpbb2func)
+            fpbb2func, proc2icnt)
 
 
 def convert_sde_data_to_something_usable(sde_data=None):
@@ -787,10 +792,11 @@ def convert_sde_data_to_something_usable(sde_data=None):
     # bbid2rpbb            :  basic block ID & "routine" primary basic block
     # rpbb2fpbb/fpbb2rpbb  :  "routine" p. basic block & func. p. basic block
     # func2fpbb/fpbb2func  :  function name/file & func. p. basic block
+    # proc2icnt            :  process to instr per thread
 
     fid2fn, fn2fid, sbid2sbn, sbn2sbid, etid2etn, etn2etid, bbid2pid, \
         bbid2fid, offs2bbid, bbid2rpbb, rpbb2fpbb, fpbb2rpbb, func2fpbb, \
-        fpbb2func = _get_helping_mappers(sde_data)
+        fpbb2func, proc2icnt = _get_helping_mappers(sde_data)
     mapper = {'fid2fn': fid2fn, 'fn2fid': fn2fid,
               'sbid2sbn': sbid2sbn, 'sbn2sbid': sbn2sbid,
               'etid2etn': etid2etn, 'etn2etid': etn2etid,
@@ -798,7 +804,8 @@ def convert_sde_data_to_something_usable(sde_data=None):
               'offs2bbid': offs2bbid,
               'bbid2rpbb': bbid2rpbb,
               'rpbb2fpbb': rpbb2fpbb, 'fpbb2rpbb': fpbb2rpbb,
-              'func2fpbb': func2fpbb, 'fpbb2func': fpbb2func}
+              'func2fpbb': func2fpbb, 'fpbb2func': fpbb2func,
+              'proc2icnt': proc2icnt}
 
     maybe_sinks = set()
     for pid, pid_data in sde_data['Processes'].items():
@@ -2139,7 +2146,7 @@ def main():
         ## apply some lib filtering or other stuff
         #postprocess_bb_graph(G, data, mapper)
 
-        if 1:
+        if 0:
             print('jens G:', G)
             bbids= set(data.keys())
             nodes= set(list(G))
@@ -2155,7 +2162,13 @@ def main():
                 else                    : dstbb = d[1]
                 print('fn: ', data[dstbb]['Func'])
 
+        total_instr_cnt = sum([mapper['proc2icnt'][p][thread_id]
+                               for p in mapper['proc2icnt']])
         total_cycles = G.size(weight='llvm_cycles')
+
+        print('Total instructions on rank %s and thread ID %s : %s (yields IPC of : %s)'
+              % (0, thread_id, total_instr_cnt, total_instr_cnt / total_cycles))
+
         print('LLVM: Total CPU cycles on rank %s and thread ID %s : %s\n'
               % (0, thread_id, total_cycles) +
               'LLVM: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)'
