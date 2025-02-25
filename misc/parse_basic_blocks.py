@@ -276,9 +276,10 @@ def _parse_FILE_NAMES(sde_bb_json=None, arch=None):
     ARCHS['skylake_avx512'] = ['x86_64', 'vdso.so']
     ARCHS['westmere'] = ['x86_64', 'vdso.so']
     ARCHS['x86_64'] = ['x86_64', 'vdso.so']
-    ARCHS['aarch64'] = ['aarch64', 'vdso-be.so']
-    ARCHS['thunderx2'] = ['aarch64', 'vdso-be.so']
-    ARCHS['a64fx'] = ['aarch64', 'vdso-be.so'] # be==big-endian
+    ARCHS['aarch64'] = ['aarch64', 'vdso-le.so'] # be==big-endian, le==little
+    ARCHS['thunderx2'] = ['aarch64', 'vdso-le.so']
+    ARCHS['a64fx'] = ['aarch64', 'vdso-le.so']
+    ARCHS['neoverse_n1'] = ['aarch64', 'vdso-le.so']
     ARCHS['power7'] = ['ppc64', 'vdso-64.so']
     ARCHS['power8'] = ['ppc64', 'vdso-64.so']
     ARCHS['power9'] = ['ppc64', 'vdso-64.so'] # random guess
@@ -1261,6 +1262,7 @@ def simulate_cycles_with_OSACA(keep=False, arch=None, blkdata=None,
     ARCHS['thunderx2'] = 'TX2'
     ARCHS['aarch64'] = 'N1'
     ARCHS['a64fx'] = 'A64FX'
+    ARCHS['neoverse_n1'] = 'N1'
     assert(ARCHS[arch])
 
     oparser = osaca.create_parser()
@@ -1473,6 +1475,7 @@ def simulate_cycles_with_LLVM_MCA(blockdata=None, mapper=None, arch=None,
     ARCHS['aarch64'] = ['aarch64', 'generic']
     ARCHS['thunderx2'] = ['aarch64', 'thunderx2t99']
     ARCHS['a64fx'] = ['aarch64', 'a64fx'] #'generic -mattr=+fp-armv8,+v8.2a,+neon,+sve']
+    ARCHS['neoverse_n1'] = ['aarch64', 'neoverse-n1', '+v8.2a,+aes,+crc,+dotprod,+fp-armv8,+fullfp16,+lse,+spe,+ras,+rcpc,+rdm,+sha2,+neon,+ssbs'] #for "older" Ampere Altra CPus
     ARCHS['power7'] = ['ppc64', 'pwr7']
     ARCHS['power8'] = ['ppc64', 'pwr8']
     ARCHS['power9'] = ['ppc64', 'pwr9']
@@ -1527,6 +1530,7 @@ def simulate_cycles_with_LLVM_MCA(blockdata=None, mapper=None, arch=None,
             p = run(['llvm-mca',
                      '--mtriple=%s-unknown-linux-gnu' % ARCHS[arch][0],
                      '--mcpu=%s' % ARCHS[arch][1],
+                     *(("--mattr=%s" % ARCHS[arch][2],) if ARCHS[arch][2] else ()),
                      '--iterations=%s' % icnt,
                      '-timeline',
                      '-timeline-max-iterations=1',
@@ -2080,6 +2084,7 @@ def main():
     ARCHS['aarch64'] = []
     ARCHS['thunderx2'] = []
     ARCHS['a64fx'] = [1800.0, 2000.0, 2200.0]
+    ARCHS['neoverse_n1'] = [1000.0, 2000.0, 3000.0]
     ARCHS['power7'] = []
     ARCHS['power8'] = []
     ARCHS['power9'] = []
