@@ -29,22 +29,54 @@ make -j$(nproc) all  2>&1 |tee -a build.log
 cd -
 ```
 
-# Build destructor (run after app's main) to dump /proc/self/maps
+# Get LLVM/GCC tooling in place for cross compiling
 ```
-bash -c "source ~/llvm-v19.1.4/init.sh; rm -f misc/libdpm.*; clang misc/dump_proc_maps.c -c -o dpm.o; ar rcs misc/libdpm.a dpm.o; rm -f dpm.o; clang misc/dump_proc_maps.c -c -fPIC -o dpm.o; clang dpm.o -shared -o misc/libdpm.so; rm -f dpm.o"
+LLVMV=19.1.7
+URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVMV}/LLVM-${LLVMV}-Linux-X64.tar.xz"; F="$(basename "${URL}")"
+if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
+[ ! -d llvm ] && mkdir llvm && tar xf "${F}" -C llvm --strip-components 1
+###
+GNUV="14.2.rel1"; __GNU_PREFIX__="aarch64-none-linux-gnu"; GCCARMVERSION="arm-gnu-toolchain-${GNUV}-x86_64-${__GNU_PREFIX__}"
+URL="https://developer.arm.com/-/media/Files/downloads/gnu/${GNUV}/binrel/${GCCARMVERSION}.tar.xz"; F="$(basename "${URL}")"
+if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
+[ ! -d gnu ] && mkdir gnu && tar xf "${F}" -C gnu --strip-components 1
+###
+export PATH="$(pwd)/llvm/bin:$(pwd)/gnu/bin:${PATH}"
+SYSROOT="$(pwd)/gnu/${__GNU_PREFIX__}/libc"
+CROSSFLAGS=("--target=aarch64-unknown-linux-gnu" "-march=armv8.2-a+sve" "-mcpu=a64fx" "-msve-vector-bits=512" "--sysroot=${SYSROOT}" "--gcc-toolchain=$(pwd)/gnu" "-Wl,-rpath=${SYSROOT}/lib64:${SYSROOT}/usr/lib64" "-Wl,-dynamic-linker=${SYSROOT}/lib/ld-linux-aarch64.so.1")
 ```
 
+# Build destructor (run after app's main) to dump /proc/self/maps
+```
+rm -f misc/libdpm.*
+clang ${CROSSFLAGS[@]} misc/dump_proc_maps.c -c -o dpm.o
+ar rcs misc/libdpm.a dpm.o
+rm -f dpm.o
+clang ${CROSSFLAGS[@]} misc/dump_proc_maps.c -c -fPIC -o dpm.o
+clang ${CROSSFLAGS[@]} dpm.o -shared -o misc/libdpm.so
+rm -f dpm.o
+DPMFLAGS=("-L$(pwd)/misc" "-Wl,-rpath=$(pwd)/misc" "-Wl,--whole-archive" "-ldpm" "-Wl,--no-whole-archive")
+```
 
 # Build guest applications (e.g. stream)
 ```
-bash -c "source ~/llvm-v19.1.4/init.sh; clang -o sum ./misc/sum.c -O0 -static -L./misc -Wl,-rpath=\$(pwd)/misc -Wl,--whole-archive -ldpm -Wl,--no-whole-archive"
-bash -c "source ~/llvm-v19.1.4/init.sh; clang -o stream ./misc/stream.c -fopenmp -DSTREAM_ARRAY_SIZE=1024 -DTUNED -L./misc -Wl,-rpath=\$(pwd)/misc -Wl,--whole-archive -ldpm -Wl,--no-whole-archive"
+clang ${CROSSFLAGS[@]} -o sum ./misc/sum.c -O0 -static ${DPMFLAGS[@]}
+clang ${CROSSFLAGS[@]} -o stream ./misc/stream.c -fopenmp=libgomp -DSTREAM_ARRAY_SIZE=1024 -DTUNED ${DPMFLAGS[@]}
 ```
 
 # Build testing/validation set
 ```
-mkdir -p misc/polybench; URL="https://downloads.sourceforge.net/project/polybench/polybench-c-4.2.1-beta.tar.gz"; DEP=$(basename $URL); if [ ! -f misc/${DEP} ]; then wget ${URL} -O misc/${DEP}; fi; tar xzf misc/${DEP} -C misc/polybench --strip-components 1
-bash -c "source ~/llvm-v19.1.4/init.sh; cd misc/polybench; for BName in \$(find datamining linear-algebra medley stencils -name '*.c' | /bin/grep -v '\.orig\.'); do clang -O3 -ffast-math -flto=full -I\$(dirname \${BName}) -I./utilities ./utilities/polybench.c \${BName} -DMINI_DATASET -DPOLYBENCH_TIME -o \${BName}.exe -L\$(pwd)/../../misc -Wl,-rpath=\$(pwd)/../../misc -Wl,--whole-archive -ldpm -Wl,--no-whole-archive -static; done; cd -"
+URL="https://downloads.sourceforge.net/project/polybench/polybench-c-4.2.1-beta.tar.gz"; F=$(basename $URL)
+if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
+[ ! -d polybench ] && mkdir polybench && tar xzf "${F}" -C polybench --strip-components 1
+#
+cd polybench
+for BName in $(find datamining linear-algebra medley stencils -name '*.c' | /bin/grep -v '\.orig\.'); do
+    clang ${CROSSFLAGS[@]} ${DPMFLAGS[@]} -O3 -ffast-math -flto=full \
+        -I$(dirname ${BName}) -I./utilities ./utilities/polybench.c ${BName} \
+        -DMINI_DATASET -DPOLYBENCH_TIME -o ${BName}.exe -static
+done
+cd -
 ```
 
 # Exec bbv plugin to test functionality
@@ -92,24 +124,6 @@ if lscpu | grep 'sve' >/dev/null 2>&1; then
 else echo "ERR: please exec this part on A64FX to get real perf numbers"; fi
 ```
 
-# Using gcc toolchain instead of clang
-```
-__GNU_DL_VERS__="14.2.rel1"
-__GNU_PREFIX__="aarch64-none-linux-gnu"
-GCCARMVERSION="arm-gnu-toolchain-${__GNU_DL_VERS__}-x86_64-${__GNU_PREFIX__}"
-GCCARMx86URL="https://developer.arm.com/-/media/Files/downloads/gnu/${__GNU_DL_VERS__}/binrel/${GCCARMVERSION}.tar.xz"
-URL="${GCCARMx86URL}"; F="$(basename "${URL}")"
-if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
-tar xf "${F}"
-CROSSTOOLS="$(pwd)/${GCCARMVERSION}"
-CROSSSYSROOT="$CROSSTOOLS/${__GNU_PREFIX__}/libc"
-VECBITS=512	#"scalable"
-CROSSFLAGS="-march=armv8.2-a+sve -mcpu=a64fx -msve-vector-bits=${VECBITS}"
-CROSSFLAGS+=" --sysroot=$CROSSSYSROOT -Wl,-rpath=$CROSSSYSROOT/lib64:$CROSSSYSROOT/usr/lib64 -Wl,-dynamic-linker=$CROSSSYSROOT/lib/ld-linux-aarch64.so.1"
-bash -c "export PATH=$CROSSTOOLS/bin:$PATH; rm -f misc/libdpm.*; ${__GNU_PREFIX__}-gcc $CROSSFLAGS misc/dump_proc_maps.c -c -o dpm.o; ${__GNU_PREFIX__}-ar rcs misc/libdpm.a dpm.o; rm -f dpm.o; ${__GNU_PREFIX__}-gcc $CROSSFLAGS misc/dump_proc_maps.c -c -fPIC -o dpm.o; ${__GNU_PREFIX__}-gcc $CROSSFLAGS dpm.o -shared -o misc/libdpm.so; rm -f dpm.o"
-bash -c "export PATH=$CROSSTOOLS/bin:$PATH; ${__GNU_PREFIX__}-gcc $CROSSFLAGS -o stream ./misc/stream.c -fopenmp -DSTREAM_ARRAY_SIZE=1024 -DTUNED -L./misc -Wl,-rpath=\$(pwd)/misc -Wl,--whole-archive -ldpm -Wl,--no-whole-archive"
-./build/qemu-aarch64 -E OMP_NUM_THREADS=12 -plugin 'build/contrib/plugins/libdcfg.so,outfile=stream.dcfg' -d plugin ./stream
-```
 
 # TODO LIST
 - fix misc/parse\_basic\_blocks.py to handle threads (see line 1694)
