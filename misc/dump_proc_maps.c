@@ -1,18 +1,24 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <errno.h>
+#include <fcntl.h>
 static void dump_proc_maps_after_main(void) __attribute__((destructor));
 static void dump_proc_maps_after_main(void) {
     FILE *pidmap_in_file, *pidmap_out_file;
     char fn[128];
 
     snprintf(fn, sizeof(fn), "/tmp/%d.dpm", getpid());
-    if (!(pidmap_out_file = fopen(fn, "w")))
+    if (!(pidmap_out_file = fopen(fn, "w"))) {
+        fprintf(stderr, "ERR: fopen for fn=%s with err %d\n", fn, errno);
         return;
+    }
 
     snprintf(fn, sizeof(fn), "/proc/%d/maps", getpid());
-    if (!(pidmap_in_file = fopen(fn, "r")))
+    if (!(pidmap_in_file = fopen(fn, "r"))) {
+        fprintf(stderr, "ERR: fopen for fn=%s with err %d\n", fn, errno);
         return;
+    }
 
     char line[128+(128+256)];
     uint64_t start, end;

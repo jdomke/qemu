@@ -43,7 +43,8 @@ KNOWN_ARCHS = {
     'graviton2': None, 'neoverse_n1': None, 'neoverse_n2': None,
     'm1': None, 'm2': None, 'arm': None,
     # other
-    'ppc': None, 'ppcle': None, 'sparc': None, 'sparc64': None, 'riscv64': None
+    'ppc': None, 'ppcle': None, 'sparc': None, 'sparc64': None,
+    'riscv64': None, 'veyron_v1': None, 'xiangshan_nanhu': None,
 }
 
 def _get_OBJDUMP_ASSEMBLY(sde_files=None):
@@ -88,16 +89,18 @@ def _get_OBJDUMP_ASSEMBLY(sde_files=None):
         #print('_get_OBJDUMP_ASSEMBLY', FILE_NAME)
         p = run(['llvm-readelf', '--program-headers', FILE_NAME], stdout=PIPE)
         load_os  = None
+        #print(p.stdout.decode())
         for line in p.stdout.decode().splitlines():
             #print('_get_OBJDUMP_ASSEMBLY', line)
             if elf_part.match(line):
                 load_os = int(elf_part.match(line).group(1).strip(), 16)
                 break
         assert(load_os is not None)
-        if load_os == int('0x400000', 16) or load_os == int('0x200000', 16):
+        if load_os == int('0x400000', 16) or load_os == int('0x200000', 16):          # \
+            #    or load_os == int('0x010000', 16):     <- riscv static builds, fix later
             objdp_asm[fid]['LO'] = load_os
         elif load_os > 0:
-            exit('ERR: never seen before base address offset')
+            exit('ERR: never seen before base address offset %s' % load_os)
 
         #XXX: objdump may not show all the symbols (eg libc.so.6 only has a
         #     bit .text blob :-( so we first check nm and extract the asm from
@@ -110,7 +113,7 @@ def _get_OBJDUMP_ASSEMBLY(sde_files=None):
                  '--print-size',
                  '--numeric-sort',
                  FILE_NAME], stdout=PIPE)
-
+        #print(p.stdout.decode())
         for line in p.stdout.decode().splitlines():
             if nm_part.match(line):
                 nm = nm_part.match(line)
@@ -283,6 +286,8 @@ def _parse_FILE_NAMES(sde_bb_json=None, arch=None):
     ARCHS['power7'] = ['ppc64', 'vdso-64.so']
     ARCHS['power8'] = ['ppc64', 'vdso-64.so']
     ARCHS['power9'] = ['ppc64', 'vdso-64.so'] # random guess
+    ARCHS['veyron_v1'] = ['riscv', 'vdso-64.so']
+    ARCHS['xiangshan_nanhu'] = ['riscv', 'vdso-64.so']
     assert(ARCHS[arch])
 
     # "FILE_NAMES" :
@@ -1263,6 +1268,8 @@ def simulate_cycles_with_OSACA(keep=False, arch=None, blkdata=None,
     ARCHS['aarch64'] = 'N1'
     ARCHS['a64fx'] = 'A64FX'
     ARCHS['neoverse_n1'] = 'N1'
+    #ARCHS['veyron_v1'] = ''
+    #ARCHS['xiangshan_nanhu'] = ''
     assert(ARCHS[arch])
 
     oparser = osaca.create_parser()
@@ -1394,6 +1401,13 @@ def _fix_stupid_llvmasm_and_mca_quirks(asm=None, num_asm=None):
         #print('_fix_stupid_llvmasm_and_mca_quirks', asm_os, asm_in)
         asm_in = sub(r'^(b.[a-z]{2}\s+.*)(0x\w+)$', lambda m: m.group(1)+hex(int(m.group(2),16)-int(asm_os,16)), asm_in,
                      count=0, flags=IGNORECASE)
+        ## XXX: riscv64/xiangshan-nanhu
+        ## mca needs bnez instructions with label or integer pc offset
+        ## (not hex) -> ignore 0x part and add + or - as offset indicator
+        #if 'bnez' in asm_in:print('before', asm_in, asm_os)
+        #asm_in = sub(r'^(b[n]{0,1}[e]{0,1}z\s+.*)([-+]?0x\w+)$', lambda m: m.group(1)+hex(int(m.group(2),16)-int(asm_os,16)), asm_in,
+        #             count=0, flags=IGNORECASE)
+        #if 'bnez' in asm_in:print('after', asm_in)
         #if int(asm_os,16)==int('0x1886c',16):
         #    print(asm_os, asm_in)
         #    exit()
@@ -1479,6 +1493,8 @@ def simulate_cycles_with_LLVM_MCA(blockdata=None, mapper=None, arch=None,
     ARCHS['power7'] = ['ppc64', 'pwr7']
     ARCHS['power8'] = ['ppc64', 'pwr8']
     ARCHS['power9'] = ['ppc64', 'pwr9']
+    ARCHS['veyron_v1'] = ['riscv64', 'veyron-v1']
+    ARCHS['xiangshan_nanhu'] = ['riscv64', 'xiangshan-nanhu']
     assert(ARCHS[arch])
 
     #fid2fn_m, bbid2fid_m, sbid2sbn_m = \
@@ -2088,6 +2104,8 @@ def main():
     ARCHS['power7'] = []
     ARCHS['power8'] = []
     ARCHS['power9'] = []
+    ARCHS['veyron_v1'] = [1000.0, 2400.0, 3600.0]
+    ARCHS['xiangshan_nanhu'] = [1000.0, 2000.0, 2500.0]
 
     from psutil import cpu_freq
     from argparse import ArgumentParser

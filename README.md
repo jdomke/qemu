@@ -24,7 +24,7 @@ export PKG_CONFIG_PATH="$(pwd)/json-c-inst/lib64/pkgconfig${PKG_CONFIG_PATH:+:${
 rm -rf build
 mkdir build
 cd build
-../configure --extra-cflags="$(pkg-config --cflags json-c,bzip2)" --extra-ldflags="$(pkg-config --libs json-c,bzip2)" --target-list=aarch64-linux-user --enable-plugins --disable-docs 2>&1 |tee -a build.log
+../configure --extra-cflags="$(pkg-config --cflags json-c,bzip2)" --extra-ldflags="$(pkg-config --libs json-c,bzip2)" --target-list=aarch64-linux-user,riscv64-linux-user --enable-plugins --disable-docs 2>&1 |tee -a build.log
 make -j$(nproc) all  2>&1 |tee -a build.log
 cd -
 ```
@@ -135,6 +135,33 @@ if lscpu | grep 'sve' >/dev/null 2>&1; then
         echo "Total running time: $(echo "${ENDED} - ${START}" | bc -l)" | tee -a "${LOG}"
     done
 else echo "ERR: please exec this part on A64FX to get real perf numbers"; fi
+```
+
+# RISC-V example for Ventana Veyron V1 CPU
+```
+__GNU_PREFIX__="riscv64-unknown-linux-gnu"
+URL="https://github.com/riscv-collab/riscv-gnu-toolchain/releases/download/2025.01.20/riscv64-glibc-ubuntu-24.04-gcc-nightly-2025.01.20-nightly.tar.xz"; F="$(basename "${URL}")"
+if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
+[ ! -d riscv ] && mkdir riscv && tar xf "${F}" -C riscv --strip-components 1
+###
+export PATH="$(pwd)/llvm/bin:$(pwd)/riscv/bin:${PATH}"
+SYSROOT="$(pwd)/riscv/sysroot"
+CROSSFLAGS=("--target=${__GNU_PREFIX__}" "-mcpu=xiangshan-nanhu" "--sysroot=${SYSROOT}" "--gcc-toolchain=$(pwd)/riscv" "-Wl,-rpath=${SYSROOT}/lib:${SYSROOT}/usr/lib:$(pwd)/llvm/lib" "-Wl,-dynamic-linker=${SYSROOT}/lib/ld-linux-riscv64-lp64d.so.1")
+###
+rm -f misc/libdpm.*
+clang ${CROSSFLAGS[@]} misc/dump_proc_maps.c -c -o dpm.o
+ar rcs misc/libdpm.a dpm.o
+rm -f dpm.o
+clang ${CROSSFLAGS[@]} misc/dump_proc_maps.c -c -fPIC -o dpm.o
+clang ${CROSSFLAGS[@]} dpm.o -shared -o misc/libdpm.so
+rm -f dpm.o
+DPMFLAGS=("-L$(pwd)/misc" "-Wl,-rpath=$(pwd)/misc" "-Wl,--whole-archive" "-ldpm" "-Wl,--no-whole-archive")
+### (drop '-static' since it leads to odd behavior with bnez and strange offsets)
+clang ${CROSSFLAGS[@]} -o sum ./misc/sum.c -O0 ${DPMFLAGS[@]}
+###
+./build/qemu-riscv64 -E OMP_NUM_THREADS=1 -plugin 'build/contrib/plugins/libdcfg.so,outfile=sum.dcfg' -d plugin ./sum
+###
+python3 ./misc/parse_basic_blocks.py --sde_json ./sum.dcfg.json.bz2 --cpu_arch xiangshan_nanhu
 ```
 
 
