@@ -1255,25 +1255,32 @@ def simulate_cycles_with_OSACA(keep=False, arch=None, blkdata=None,
            and isinstance(blkdata, dict) and isinstance(branches, list))
 
     ARCHS = deepcopy(KNOWN_ARCHS)
-    ARCHS['sandybridge'] = 'SNB'
-    ARCHS['ivybridge'] = 'IVB'
-    ARCHS['haswell'] = 'HSW'
-    ARCHS['broadwell'] = 'BDW'
-    ARCHS['skylake_avx512'] = 'SKX'
-    ARCHS['cascadelake'] = 'CSX'
-    ARCHS['icelake'] = 'ICL'
-    ARCHS['zen'] = 'ZEN1'
-    ARCHS['zen2'] = 'ZEN2'
-    ARCHS['thunderx2'] = 'TX2'
-    ARCHS['aarch64'] = 'N1'
-    ARCHS['a64fx'] = 'A64FX'
-    ARCHS['neoverse_n1'] = 'N1'
+    ARCHS['sandybridge'] = ['x86_64', 'SNB', '#']
+    ARCHS['ivybridge'] = ['x86_64', 'IVB', '#']
+    ARCHS['haswell'] = ['x86_64', 'HSW', '#']
+    ARCHS['broadwell'] = ['x86_64', 'BDW', '#']
+    ARCHS['skylake_avx512'] = ['x86_64', 'SKX', '#']
+    ARCHS['cascadelake'] = ['x86_64', 'CSX', '#']
+    ARCHS['icelake'] = ['x86_64', 'ICX', '#']
+    ARCHS['sapphire_apids'] = ['x86_64', 'SPR', '#']
+    ARCHS['zen'] = ['x86_64', 'ZEN1', '#']
+    ARCHS['zen2'] = ['x86_64', 'ZEN2', '#']
+    ARCHS['zen3'] = ['x86_64', 'ZEN3', '#']
+    ARCHS['zen4'] = ['x86_64', 'ZEN4', '#']
+    ARCHS['cortex_a72'] = ['aarch64', 'A72', '//']
+    ARCHS['neoverse_n1'] = ['aarch64', 'N1', '//']
+    ARCHS['neoverse_v2'] = ['aarch64', 'V2', '//']
+    ARCHS['thunderx2'] = ['aarch64', 'TX2', '//']
+    ARCHS['a64fx'] = ['aarch64', 'A64FX', '//']
+    ARCHS['taishan_v110'] = ['aarch64', 'TSV110', '//']
+    ARCHS['apple_m1'] = ['aarch64', 'M1', '//']
+    ARCHS['nvidia_grace'] = ['aarch64', 'V2', '//']
     #ARCHS['veyron_v1'] = ''
     #ARCHS['xiangshan_nanhu'] = ''
     assert(ARCHS[arch])
 
     oparser = osaca.create_parser()
-    oargs = oparser.parse_args(['--arch', ARCHS[arch],
+    oargs = oparser.parse_args(['--arch', ARCHS[arch][1],
                                 '--ignore-unknown', '--verbose',
                                 '--lcd-timeout', '60',
                                 path.realpath(__file__)])
@@ -1298,7 +1305,7 @@ def simulate_cycles_with_OSACA(keep=False, arch=None, blkdata=None,
         osaca_in_fn = '/dev/shm/osaca_%s_%s_%s.s' % (getpid(), bbid, sink_bbid)
 
         with open(osaca_in_fn, 'w') as osaca_in_file:
-            osaca_in_file.write('# OSACA-BEGIN\n');
+            osaca_in_file.write('%s OSACA-BEGIN\n' % ARCHS[arch][2]);
 
             if not selfloop:
                 osaca_in_file.write('\n'.join([sub(r'jmpq\s+\*%ds:', r'jmpq *', # osaca parser currently fails for 'jmpq *%ds:0x...'
@@ -1313,17 +1320,18 @@ def simulate_cycles_with_OSACA(keep=False, arch=None, blkdata=None,
                                            in blkdata[sink_bbid]['ASM']])
                                 + '\n')
 
-            osaca_in_file.write('# OSACA-END\n')
+            osaca_in_file.write('%s OSACA-END\n' % ARCHS[arch][2])
 
         # overwrite stdout with special output stream
         osaca_out = StringIO()
         try:
             with open(osaca_in_fn, 'r') as osaca_in_file:
                 oargs.file = osaca_in_file
-                bak_machine_model_pickle, bak_machine_isa_pickle = \
-                    osaca.run(oargs, output_file=osaca_out,
-                              mmodel=bak_machine_model_pickle,
-                              misa=bak_machine_isa_pickle)
+                osaca.run(oargs, output_file=osaca_out)
+                #bak_machine_model_pickle, bak_machine_isa_pickle = \
+                #    osaca.run(oargs, output_file=osaca_out,
+                #              mmodel=bak_machine_model_pickle,
+                #              misa=bak_machine_isa_pickle)
         except:
             with open(osaca_in_fn, 'r') as osaca_in_file:
                 print('ERR in osaca:\n%s\n' % osaca_out.getvalue(),
@@ -1400,6 +1408,9 @@ def _fix_stupid_llvmasm_and_mca_quirks(asm=None, num_asm=None):
         # same for b.eq/b.ne/...
         #print('_fix_stupid_llvmasm_and_mca_quirks', asm_os, asm_in)
         asm_in = sub(r'^(b.[a-z]{2}\s+.*)(0x\w+)$', lambda m: m.group(1)+hex(int(m.group(2),16)-int(asm_os,16)), asm_in,
+                     count=0, flags=IGNORECASE)
+        # mca complains about set[p|m|e] and cpyf[p|m|e] -> error: instruction requires: mops
+        asm_in = sub(r'^(set|cpyf)[pme]\s+.*', r'nop', asm_in,
                      count=0, flags=IGNORECASE)
         ## XXX: riscv64/xiangshan-nanhu
         ## mca needs bnez instructions with label or integer pc offset
@@ -1678,8 +1689,8 @@ def second_opinion_from_other_tools(blkdata=None, mapper=None, arch=None,
         edge_data = blkdata[bbid]['out_edges'][sink_bbid]
         edge_data['CyclesPerIter'] = 4 * [edge_data['CyclesPerIter']]
 
-    simulate_cycles_with_IACA(True, arch, blkdata, branches)    # uiCA needs same files
-    simulate_cycles_with_uiCA(keep, arch, blkdata, branches)
+    #simulate_cycles_with_IACA(True, arch, blkdata, branches)    # uiCA needs same files
+    #simulate_cycles_with_uiCA(keep, arch, blkdata, branches)
     simulate_cycles_with_OSACA(keep, arch, blkdata, branches)
 
 
@@ -2158,7 +2169,7 @@ def main():
     del sde_data
 
     simulate_cycles_with_LLVM_MCA(data, mapper, arch, args.get('__keep__'))
-    #second_opinion_from_other_tools(data, mapper, arch, args.get('__keep__'))
+    second_opinion_from_other_tools(data, mapper, arch, args.get('__keep__'))
     total_cycles_per_thread, thread_id = [], -1
     while True:
         thread_id += 1
@@ -2215,13 +2226,13 @@ def main():
         #         total_cycles / (cpufcur * pow(10, 6)),
         #         total_cycles / (cpufmax * pow(10, 6))))
 
-        #total_cycles = G.size(weight='osaca_cycles')
-        #print('OSACA: Total CPU cycles on rank %s and thread ID %s : %s\n'
-        #      % (0, thread_id, total_cycles) +
-        #      'OSACA: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)'
-        #      % (total_cycles / (cpufmin * pow(10, 6)),
-        #         total_cycles / (cpufcur * pow(10, 6)),
-        #         total_cycles / (cpufmax * pow(10, 6))))
+        total_cycles = G.size(weight='osaca_cycles')
+        print('OSACA: Total CPU cycles on rank %s and thread ID %s : %s\n'
+              % (0, thread_id, total_cycles) +
+              'OSACA: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)'
+              % (total_cycles / (cpufmin * pow(10, 6)),
+                 total_cycles / (cpufcur * pow(10, 6)),
+                 total_cycles / (cpufmax * pow(10, 6))))
 
         G.clear()
         del G
