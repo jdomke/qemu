@@ -120,7 +120,7 @@ python3 -m pip install --user -r misc/requirements.txt
 
 # Exec block analyzer to get cycles from MCA estimates
 ```
-python3 ./misc/parse_basic_blocks.py --sde_json ./stream.dcfg.json.bz2 --cpu_arch a64fx
+python3 ./misc/parse_basic_blocks.py --sde_json ./stream.dcfg.json.bz2 --cpu_arch ${MCPU}
 #Note: use -s and -l options to avoid parsing the oject files every time
 ```
 
@@ -132,7 +132,7 @@ for BName in $(find polybench -name '*.c.exe'); do ./build/qemu-aarch64 \
 for BName in $(find polybench -name '*.c.exe'); do python3 \
     ./misc/parse_basic_blocks.py \
     --sde_json "$(basename ${BName}).dcfg.json.bz2" \
-    --cpu_arch a64fx 2>&1 | tee "$(basename ${BName}).dcfg.json.bz2.log"; done
+    --cpu_arch ${MCPU} 2>&1 | tee "$(basename ${BName}).dcfg.json.bz2.log"; done
 if lscpu | grep 'sve' >/dev/null 2>&1; then
     for BName in $(find polybench -name '*.c.exe'); do
         LOG="$(basename ${BName}).dcfg.json.bz2.log"
@@ -170,7 +170,7 @@ clang ${CROSSFLAGS[@]} -o sum ./misc/sum.c -O0 ${DPMFLAGS[@]}
 ###
 ./build/qemu-riscv64 -E OMP_NUM_THREADS=1 -plugin 'build/contrib/plugins/libdcfg.so,outfile=sum.dcfg' -d plugin ./sum
 ###
-python3 ./misc/parse_basic_blocks.py --sde_json ./sum.dcfg.json.bz2 --cpu_arch xiangshan_nanhu
+python3 ./misc/parse_basic_blocks.py --sde_json ./sum.dcfg.json.bz2 --cpu_arch ${MCPU}
 ```
 
 
