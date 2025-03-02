@@ -1291,8 +1291,11 @@ def simulate_cycles_with_OSACA(keep=False, arch=None, blkdata=None,
     for bbid, sink_bbid, _ in branches:
         edge_data = blkdata[bbid]['out_edges'][sink_bbid]
 
+        bdata = blkdata[bbid]
+        sink_bdata = blkdata[sink_bbid]
+
         selfloop, twoblockloop = (bbid == sink_bbid), \
-            (bbid != sink_bbid and bbid in blkdata[sink_bbid]['out_edges'])
+            (bbid != sink_bbid and bbid in sink_bdata['out_edges'])
 
         # sadly OSACA has no timeline, so result will be a lower bound and
         # slightly overestimating the performance for blocks which are not
@@ -1302,23 +1305,17 @@ def simulate_cycles_with_OSACA(keep=False, arch=None, blkdata=None,
                   ' %s->%s' % (bbid, sink_bbid))
             #return None
 
+        bdata_asm, num_asm_bbid = _fix_stupid_llvmasm_and_osaca_quirks(bdata['ASM'], bdata['NumASM'])
+        sink_bdata_asm, num_asm_sink_bbid = _fix_stupid_llvmasm_and_osaca_quirks(sink_bdata['ASM'], sink_bdata['NumASM'])
+
         osaca_in_fn = '/dev/shm/osaca_%s_%s_%s.s' % (getpid(), bbid, sink_bbid)
 
         with open(osaca_in_fn, 'w') as osaca_in_file:
             osaca_in_file.write('%s OSACA-BEGIN\n' % ARCHS[arch][2]);
 
             if not selfloop:
-                osaca_in_file.write('\n'.join([sub(r'jmpq\s+\*%ds:', r'jmpq *', # osaca parser currently fails for 'jmpq *%ds:0x...'
-                                                   instr,
-                                                   count=0, flags=IGNORECASE)
-                                               for _, instr
-                                               in blkdata[bbid]['ASM']])
-                                    + '\n')
-            osaca_in_file.write('\n'.join([sub(r'jmpq\s+\*%ds:', r'jmpq *',
-                                               instr, count=0, flags=IGNORECASE)
-                                           for _, instr
-                                           in blkdata[sink_bbid]['ASM']])
-                                + '\n')
+                osaca_in_file.write('\n'.join([instr for _, instr in bdata_asm]) + '\n')
+            osaca_in_file.write('\n'.join([instr for _, instr in sink_bdata_asm]) + '\n')
 
             osaca_in_file.write('%s OSACA-END\n' % ARCHS[arch][2])
 
@@ -1433,6 +1430,27 @@ def _fix_stupid_llvmasm_and_mca_quirks(asm=None, num_asm=None):
         asm_out.append([asm_os, asm_in])
 
     return (asm_out, num_asm)
+
+
+def _fix_stupid_llvmasm_and_osaca_quirks(asm=None, num_asm=None):
+    assert(isinstance(asm, list) and isinstance(num_asm, int))
+
+    asm_out = []
+    # XXX handle exceptions:
+    for asm_os, asm_in in asm:
+        # XXX: x86/broadwell
+        # osaca parser currently fails for 'jmpq *%ds:0x...'
+        asm_in = sub(r'jmpq\s+\*%ds:', r'jmpq *', asm_in,
+                     count=0, flags=IGNORECASE)
+        # XXX: aarch64/a64fx and neoverse-n1
+        # mca complains about set[p|m|e] and cpyf[p|m|e] -> error: instruction requires: mops
+        asm_in = sub(r'^(set|cpyf)[pme]\s+.*', r'nop', asm_in,
+                     count=0, flags=IGNORECASE)
+
+        asm_out.append([asm_os, asm_in])
+
+    return (asm_out, num_asm)
+
 
 def simulate_cycles_with_LLVM_MCA(blockdata=None, mapper=None, arch=None,
                                   keep=False):
@@ -2204,15 +2222,17 @@ def main():
                                for p in mapper['proc2icnt']])
         total_cycles = G.size(weight='llvm_cycles')
 
-        print('Total instructions on rank %s and thread ID %s : %s (yields IPC of : %s)'
-              % (0, thread_id, total_instr_cnt, total_instr_cnt / total_cycles))
+        print('Total instructions on rank %s and thread ID %s : %s'
+              % (0, thread_id, total_instr_cnt))
 
         print('LLVM: Total CPU cycles on rank %s and thread ID %s : %s\n'
               % (0, thread_id, total_cycles) +
-              'LLVM: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)'
+              'LLVM: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)\n'
               % (total_cycles / (cpufmin * pow(10, 6)),
                  total_cycles / (cpufcur * pow(10, 6)),
-                 total_cycles / (cpufmax * pow(10, 6))))
+                 total_cycles / (cpufmax * pow(10, 6))) +
+              'LLVM: (Converted to IPC): %s'
+              % (total_instr_cnt / total_cycles))
 
         #total_cycles = G.size(weight='iaca_cycles')
         #print('IACA: Total CPU cycles on rank %s and thread ID %s : %s\n'
@@ -2233,10 +2253,12 @@ def main():
         total_cycles = G.size(weight='osaca_cycles')
         print('OSACA: Total CPU cycles on rank %s and thread ID %s : %s\n'
               % (0, thread_id, total_cycles) +
-              'OSACA: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)'
+              'OSACA: (Converted to time (with min/curr/max freq.): %ss / %ss / %ss)\n'
               % (total_cycles / (cpufmin * pow(10, 6)),
                  total_cycles / (cpufcur * pow(10, 6)),
-                 total_cycles / (cpufmax * pow(10, 6))))
+                 total_cycles / (cpufmax * pow(10, 6))) +
+              'OSACA: (Converted to IPC): %s'
+              % (total_instr_cnt / total_cycles))
 
         G.clear()
         del G
