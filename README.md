@@ -5,6 +5,21 @@ git clone --branch bbgraph --recurse-submodules git@github.com:jdomke/qemu.git
 git submodule update --init --recursive
 ```
 
+# Common ENV settings
+```
+export LLVMV=19.1.7
+export GNUV="14.2.rel1"
+export __GNU_PREFIX__="aarch64-none-linux-gnu"
+export GCCARMVERSION="arm-gnu-toolchain-${GNUV}-x86_64-${__GNU_PREFIX__}"
+export SYSROOT="$(pwd)/gnu/${__GNU_PREFIX__}/libc"
+export MCPU=a64fx   #neoverse-n1
+export CROSSFLAGS=("--target=aarch64-unknown-linux-gnu" "-march=armv8.2-a" "-mcpu=${MCPU}" "--sysroot=${SYSROOT}" "--gcc-toolchain=$(pwd)/gnu" "-Wl,-rpath=${SYSROOT}/lib64:${SYSROOT}/usr/lib64:$(pwd)/llvm/lib" "-Wl,-dynamic-linker=${SYSROOT}/lib/ld-linux-aarch64.so.1")
+export DPMFLAGS=("-L$(pwd)/misc" "-Wl,-rpath=$(pwd)/misc" "-Wl,--whole-archive" "-ldpm" "-Wl,--no-whole-archive")
+#
+export PATH="$(pwd)/llvm/bin:$(pwd)/gnu/bin:${PATH}"
+export PKG_CONFIG_PATH="$(pwd)/json-c-inst/lib64/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+```
+
 # Build json-c
 ```
 rm -rf json-c/build
@@ -20,7 +35,6 @@ rm -rf json-c/build
 
 # Build qemu with plugins
 ```
-export PKG_CONFIG_PATH="$(pwd)/json-c-inst/lib64/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 rm -rf build
 mkdir build
 cd build
@@ -31,19 +45,13 @@ cd -
 
 # Get LLVM/GCC tooling in place for cross compiling
 ```
-LLVMV=19.1.7
 URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVMV}/LLVM-${LLVMV}-Linux-X64.tar.xz"; F="$(basename "${URL}")"
 if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
 [ ! -d llvm ] && mkdir llvm && tar xf "${F}" -C llvm --strip-components 1
 ###
-GNUV="14.2.rel1"; __GNU_PREFIX__="aarch64-none-linux-gnu"; GCCARMVERSION="arm-gnu-toolchain-${GNUV}-x86_64-${__GNU_PREFIX__}"
 URL="https://developer.arm.com/-/media/Files/downloads/gnu/${GNUV}/binrel/${GCCARMVERSION}.tar.xz"; F="$(basename "${URL}")"
 if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
 [ ! -d gnu ] && mkdir gnu && tar xf "${F}" -C gnu --strip-components 1
-###
-export PATH="$(pwd)/llvm/bin:$(pwd)/gnu/bin:${PATH}"
-SYSROOT="$(pwd)/gnu/${__GNU_PREFIX__}/libc"
-CROSSFLAGS=("--target=aarch64-unknown-linux-gnu" "-march=armv8.2-a" "-mcpu=neoverse-n1" "--sysroot=${SYSROOT}" "--gcc-toolchain=$(pwd)/gnu" "-Wl,-rpath=${SYSROOT}/lib64:${SYSROOT}/usr/lib64:$(pwd)/llvm/lib" "-Wl,-dynamic-linker=${SYSROOT}/lib/ld-linux-aarch64.so.1")
 ###
 URL="https://github.com/llvm/llvm-project/archive/refs/tags/llvmorg-${LLVMV}.tar.gz"; F="$(basename "${URL}")"
 if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
@@ -68,7 +76,6 @@ rm -f dpm.o
 clang ${CROSSFLAGS[@]} misc/dump_proc_maps.c -c -fPIC -o dpm.o
 clang ${CROSSFLAGS[@]} dpm.o -shared -o misc/libdpm.so
 rm -f dpm.o
-DPMFLAGS=("-L$(pwd)/misc" "-Wl,-rpath=$(pwd)/misc" "-Wl,--whole-archive" "-ldpm" "-Wl,--no-whole-archive")
 ```
 
 # Build guest applications (e.g. stream)
@@ -139,14 +146,17 @@ else echo "ERR: please exec this part on A64FX to get real perf numbers"; fi
 
 # RISC-V example for Ventana Veyron V1 CPU
 ```
-__GNU_PREFIX__="riscv64-unknown-linux-gnu"
+export __GNU_PREFIX__="riscv64-unknown-linux-gnu"
+export SYSROOT="$(pwd)/riscv/sysroot"
+export MCPU=xiangshan-nanhu
+export CROSSFLAGS=("--target=${__GNU_PREFIX__}" "-mcpu=${MCPU}" "--sysroot=${SYSROOT}" "--gcc-toolchain=$(pwd)/riscv" "-Wl,-rpath=${SYSROOT}/lib:${SYSROOT}/usr/lib:$(pwd)/llvm/lib" "-Wl,-dynamic-linker=${SYSROOT}/lib/ld-linux-riscv64-lp64d.so.1")
+export DPMFLAGS=("-L$(pwd)/misc" "-Wl,-rpath=$(pwd)/misc" "-Wl,--whole-archive" "-ldpm" "-Wl,--no-whole-archive")
+#
+export PATH="$(pwd)/llvm/bin:$(pwd)/riscv/bin:${PATH}"
+###
 URL="https://github.com/riscv-collab/riscv-gnu-toolchain/releases/download/2025.01.20/riscv64-glibc-ubuntu-24.04-gcc-nightly-2025.01.20-nightly.tar.xz"; F="$(basename "${URL}")"
 if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
 [ ! -d riscv ] && mkdir riscv && tar xf "${F}" -C riscv --strip-components 1
-###
-export PATH="$(pwd)/llvm/bin:$(pwd)/riscv/bin:${PATH}"
-SYSROOT="$(pwd)/riscv/sysroot"
-CROSSFLAGS=("--target=${__GNU_PREFIX__}" "-mcpu=xiangshan-nanhu" "--sysroot=${SYSROOT}" "--gcc-toolchain=$(pwd)/riscv" "-Wl,-rpath=${SYSROOT}/lib:${SYSROOT}/usr/lib:$(pwd)/llvm/lib" "-Wl,-dynamic-linker=${SYSROOT}/lib/ld-linux-riscv64-lp64d.so.1")
 ###
 rm -f misc/libdpm.*
 clang ${CROSSFLAGS[@]} misc/dump_proc_maps.c -c -o dpm.o
@@ -155,7 +165,6 @@ rm -f dpm.o
 clang ${CROSSFLAGS[@]} misc/dump_proc_maps.c -c -fPIC -o dpm.o
 clang ${CROSSFLAGS[@]} dpm.o -shared -o misc/libdpm.so
 rm -f dpm.o
-DPMFLAGS=("-L$(pwd)/misc" "-Wl,-rpath=$(pwd)/misc" "-Wl,--whole-archive" "-ldpm" "-Wl,--no-whole-archive")
 ### (drop '-static' since it leads to odd behavior with bnez and strange offsets)
 clang ${CROSSFLAGS[@]} -o sum ./misc/sum.c -O0 ${DPMFLAGS[@]}
 ###

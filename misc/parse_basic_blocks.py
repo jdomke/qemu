@@ -40,7 +40,7 @@ KNOWN_ARCHS = {
     'ppc64le': None, 'power8le': None, 'power9le': None, 'power10le': None,
     # ARM
     'aarch64': None, 'thunderx2': None, 'a64fx': None, 'graviton': None,
-    'graviton2': None, 'neoverse_n1': None, 'neoverse_n2': None,
+    'graviton2': None, 'neoverse-n1': None, 'neoverse-n2': None,
     'm1': None, 'm2': None, 'arm': None,
     # other
     'ppc': None, 'ppcle': None, 'sparc': None, 'sparc64': None,
@@ -276,18 +276,18 @@ def _parse_FILE_NAMES(sde_bb_json=None, arch=None):
     ARCHS['nehalem'] = ['x86_64', 'vdso.so']
     ARCHS['sandybridge'] = ['x86_64', 'vdso.so']
     ARCHS['skylake'] = ['x86_64', 'vdso.so']
-    ARCHS['skylake_avx512'] = ['x86_64', 'vdso.so']
+    ARCHS['skylake-avx512'] = ['x86_64', 'vdso.so']
     ARCHS['westmere'] = ['x86_64', 'vdso.so']
-    ARCHS['x86_64'] = ['x86_64', 'vdso.so']
+    ARCHS['x86-64'] = ['x86_64', 'vdso.so']
     ARCHS['aarch64'] = ['aarch64', 'vdso-le.so'] # be==big-endian, le==little
     ARCHS['thunderx2'] = ['aarch64', 'vdso-le.so']
     ARCHS['a64fx'] = ['aarch64', 'vdso-le.so']
-    ARCHS['neoverse_n1'] = ['aarch64', 'vdso-le.so']
+    ARCHS['neoverse-n1'] = ['aarch64', 'vdso-le.so']
     ARCHS['power7'] = ['ppc64', 'vdso-64.so']
     ARCHS['power8'] = ['ppc64', 'vdso-64.so']
     ARCHS['power9'] = ['ppc64', 'vdso-64.so'] # random guess
-    ARCHS['veyron_v1'] = ['riscv', 'vdso-64.so']
-    ARCHS['xiangshan_nanhu'] = ['riscv', 'vdso-64.so']
+    ARCHS['veyron-v1'] = ['riscv', 'vdso-64.so']
+    ARCHS['xiangshan-nanhu'] = ['riscv', 'vdso-64.so']
     assert(ARCHS[arch])
 
     # "FILE_NAMES" :
@@ -956,7 +956,7 @@ def simulate_cycles_with_IACA(keep=False, arch=None, blkdata=None,
     ARCHS['broadwell'] = 'BDW'
     ARCHS['haswell'] = 'HSW'
     ARCHS['skylake'] = 'SKL'
-    ARCHS['skylake_avx512'] = 'SKX'
+    ARCHS['skylake-avx512'] = 'SKX'
     assert(ARCHS[arch])
 
     for bbid, sink_bbid, _ in branches:
@@ -1132,7 +1132,7 @@ def simulate_cycles_with_uiCA(keep=False, arch=None, blkdata=None,
     ARCHS['haswell'] = 'HSW'
     ARCHS['broadwell'] = 'BDW'
     ARCHS['skylake'] = 'SKL'
-    ARCHS['skylake_avx512'] = 'SKX'
+    ARCHS['skylake-avx512'] = 'SKX'
     ARCHS['cascadelake'] = 'CSX'
     ARCHS['icelake'] = 'ICL'
     ARCHS['kabylake'] = 'KBL'
@@ -1259,24 +1259,24 @@ def simulate_cycles_with_OSACA(keep=False, arch=None, blkdata=None,
     ARCHS['ivybridge'] = ['x86_64', 'IVB', '#']
     ARCHS['haswell'] = ['x86_64', 'HSW', '#']
     ARCHS['broadwell'] = ['x86_64', 'BDW', '#']
-    ARCHS['skylake_avx512'] = ['x86_64', 'SKX', '#']
+    ARCHS['skylake-avx512'] = ['x86_64', 'SKX', '#']
     ARCHS['cascadelake'] = ['x86_64', 'CSX', '#']
     ARCHS['icelake'] = ['x86_64', 'ICX', '#']
-    ARCHS['sapphire_apids'] = ['x86_64', 'SPR', '#']
+    ARCHS['sapphirerapids'] = ['x86_64', 'SPR', '#']
     ARCHS['zen'] = ['x86_64', 'ZEN1', '#']
     ARCHS['zen2'] = ['x86_64', 'ZEN2', '#']
     ARCHS['zen3'] = ['x86_64', 'ZEN3', '#']
     ARCHS['zen4'] = ['x86_64', 'ZEN4', '#']
-    ARCHS['cortex_a72'] = ['aarch64', 'A72', '//']
-    ARCHS['neoverse_n1'] = ['aarch64', 'N1', '//']
-    ARCHS['neoverse_v2'] = ['aarch64', 'V2', '//']
+    ARCHS['cortex-a72'] = ['aarch64', 'A72', '//']
+    ARCHS['neoverse-n1'] = ['aarch64', 'N1', '//']
+    ARCHS['neoverse-v2'] = ['aarch64', 'V2', '//']
     ARCHS['thunderx2'] = ['aarch64', 'TX2', '//']
     ARCHS['a64fx'] = ['aarch64', 'A64FX', '//']
-    ARCHS['taishan_v110'] = ['aarch64', 'TSV110', '//']
-    ARCHS['apple_m1'] = ['aarch64', 'M1', '//']
-    ARCHS['nvidia_grace'] = ['aarch64', 'V2', '//']
-    #ARCHS['veyron_v1'] = ''
-    #ARCHS['xiangshan_nanhu'] = ''
+    ARCHS['taishan-v110'] = ['aarch64', 'TSV110', '//']
+    ARCHS['apple-m1'] = ['aarch64', 'M1', '//']
+    ARCHS['nvidia-grace'] = ['aarch64', 'V2', '//']
+    #ARCHS['veyron-v1'] = ''
+    #ARCHS['xiangshan-nanhu'] = ''
     assert(ARCHS[arch])
 
     oparser = osaca.create_parser()
@@ -1511,23 +1511,24 @@ def simulate_cycles_with_LLVM_MCA(blockdata=None, mapper=None, arch=None,
     ARCHS['core2'] = ['x86_64', 'core2']
     ARCHS['haswell'] = ['x86_64', 'haswell']
     ARCHS['icelake'] = ['x86_64', 'icelake-server']
+    ARCHS['sapphirerapids'] = ['x86_64', 'sapphirerapids']
     ARCHS['ivybridge'] = ['x86_64', 'ivybridge']
     ARCHS['mic_knl'] = ['x86_64', 'knl']
     ARCHS['nehalem'] = ['x86_64', 'nehalem']
     ARCHS['sandybridge'] = ['x86_64', 'sandybridge']
     ARCHS['skylake'] = ['x86_64', 'skylake']
-    ARCHS['skylake_avx512'] = ['x86_64', 'skylake-avx512']
+    ARCHS['skylake-avx512'] = ['x86_64', 'skylake-avx512']
     ARCHS['westmere'] = ['x86_64', 'westmere']
-    ARCHS['x86_64'] = ['x86_64', 'x86-64']
+    ARCHS['x86-64'] = ['x86_64', 'x86-64']
     ARCHS['aarch64'] = ['aarch64', 'generic']
     ARCHS['thunderx2'] = ['aarch64', 'thunderx2t99']
     ARCHS['a64fx'] = ['aarch64', 'a64fx'] #'generic -mattr=+fp-armv8,+v8.2a,+neon,+sve']
-    ARCHS['neoverse_n1'] = ['aarch64', 'neoverse-n1', '+v8.2a,+crc,+fp-armv8,+lse,+ras,+rdm,+neon'] #for "older" Ampere Altra CPus
+    ARCHS['neoverse-n1'] = ['aarch64', 'neoverse-n1', '+v8.2a,+crc,+fp-armv8,+lse,+ras,+rdm,+neon'] #for "older" Ampere Altra CPus
     ARCHS['power7'] = ['ppc64', 'pwr7']
     ARCHS['power8'] = ['ppc64', 'pwr8']
     ARCHS['power9'] = ['ppc64', 'pwr9']
-    ARCHS['veyron_v1'] = ['riscv64', 'veyron-v1']
-    ARCHS['xiangshan_nanhu'] = ['riscv64', 'xiangshan-nanhu']
+    ARCHS['veyron-v1'] = ['riscv64', 'veyron-v1']
+    ARCHS['xiangshan-nanhu'] = ['riscv64', 'xiangshan-nanhu']
     assert(ARCHS[arch])
 
     #fid2fn_m, bbid2fid_m, sbid2sbn_m = \
@@ -2127,18 +2128,18 @@ def main():
     ARCHS['nehalem'] = []
     ARCHS['sandybridge'] = []
     ARCHS['skylake'] = []
-    ARCHS['skylake_avx512'] = []
+    ARCHS['skylake-avx512'] = []
     ARCHS['westmere'] = []
-    ARCHS['x86_64'] = []
+    ARCHS['x86-64'] = []
     ARCHS['aarch64'] = []
     ARCHS['thunderx2'] = []
     ARCHS['a64fx'] = [1800.0, 2000.0, 2200.0]
-    ARCHS['neoverse_n1'] = [1000.0, 2000.0, 3000.0]
+    ARCHS['neoverse-n1'] = [1000.0, 2000.0, 3000.0]
     ARCHS['power7'] = []
     ARCHS['power8'] = []
     ARCHS['power9'] = []
-    ARCHS['veyron_v1'] = [1000.0, 2400.0, 3600.0]
-    ARCHS['xiangshan_nanhu'] = [1000.0, 2000.0, 2500.0]
+    ARCHS['veyron-v1'] = [1000.0, 2400.0, 3600.0]
+    ARCHS['xiangshan-nanhu'] = [1000.0, 2000.0, 2500.0]
 
     from psutil import cpu_freq
     from argparse import ArgumentParser
