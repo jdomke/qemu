@@ -1412,6 +1412,10 @@ def _fix_stupid_llvmasm_and_mca_quirks(asm=None, num_asm=None):
         # mca complains about set[p|m|e] and cpyf[p|m|e] -> error: instruction requires: mops
         asm_in = sub(r'^(set|cpyf)[pme]\s+.*', r'nop', asm_in,
                      count=0, flags=IGNORECASE)
+        # XXX: aarch64/neoverse-n1
+        # mca complains about a few unknown instructions: casa[l], swp[a]l, ...
+        asm_in = sub(r'^(casa[l]?[b]?|casl|swp[a]?l|ldadd[a]?[l]?|ld(apr|clral|set[a]?[l]?|eorl|clrl)|swp[a]?)\s+.*', r'nop', asm_in,
+                     count=0, flags=IGNORECASE)
         ## XXX: riscv64/xiangshan-nanhu
         ## mca needs bnez instructions with label or integer pc offset
         ## (not hex) -> ignore 0x part and add + or - as offset indicator
@@ -1500,7 +1504,7 @@ def simulate_cycles_with_LLVM_MCA(blockdata=None, mapper=None, arch=None,
     ARCHS['aarch64'] = ['aarch64', 'generic']
     ARCHS['thunderx2'] = ['aarch64', 'thunderx2t99']
     ARCHS['a64fx'] = ['aarch64', 'a64fx'] #'generic -mattr=+fp-armv8,+v8.2a,+neon,+sve']
-    ARCHS['neoverse_n1'] = ['aarch64', 'neoverse-n1', '+v8.2a,+aes,+crc,+dotprod,+fp-armv8,+fullfp16,+lse,+spe,+ras,+rcpc,+rdm,+sha2,+neon,+ssbs'] #for "older" Ampere Altra CPus
+    ARCHS['neoverse_n1'] = ['aarch64', 'neoverse-n1', '+v8.2a,+crc,+fp-armv8,+lse,+ras,+rdm,+neon'] #for "older" Ampere Altra CPus
     ARCHS['power7'] = ['ppc64', 'pwr7']
     ARCHS['power8'] = ['ppc64', 'pwr8']
     ARCHS['power9'] = ['ppc64', 'pwr9']

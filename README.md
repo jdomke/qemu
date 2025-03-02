@@ -36,19 +36,6 @@ URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVMV}/LLV
 if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
 [ ! -d llvm ] && mkdir llvm && tar xf "${F}" -C llvm --strip-components 1
 ###
-URL="https://github.com/llvm/llvm-project/archive/refs/tags/llvmorg-${LLVMV}.tar.gz"; F="$(basename "${URL}")"
-if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
-[ ! -d llvmomp ] && mkdir llvmomp && tar xzf "${F}" -C llvmomp --strip-components 1
-cd llvmomp/openmp
-mkdir build; cd build
-cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-  -DCMAKE_ASM_FLAGS="${CROSSFLAGS}" -DCMAKE_C_FLAGS="${CROSSFLAGS}" -DCMAKE_CXX_FLAGS="${CROSSFLAGS}" \
-  -DLIBOMP_ARCH=aarch64 -DLIBOMP_OMPD_SUPPORT:BOOL=OFF \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=../../../llvm/ \
-  -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -DCMAKE_VERBOSE_BUILD:BOOL=ON ..
-make -j install
-cd ../../../
-###
 GNUV="14.2.rel1"; __GNU_PREFIX__="aarch64-none-linux-gnu"; GCCARMVERSION="arm-gnu-toolchain-${GNUV}-x86_64-${__GNU_PREFIX__}"
 URL="https://developer.arm.com/-/media/Files/downloads/gnu/${GNUV}/binrel/${GCCARMVERSION}.tar.xz"; F="$(basename "${URL}")"
 if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
@@ -56,7 +43,20 @@ if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" 
 ###
 export PATH="$(pwd)/llvm/bin:$(pwd)/gnu/bin:${PATH}"
 SYSROOT="$(pwd)/gnu/${__GNU_PREFIX__}/libc"
-CROSSFLAGS=("--target=aarch64-unknown-linux-gnu" "-march=armv8.2-a+sve" "-mcpu=a64fx" "-msve-vector-bits=512" "--sysroot=${SYSROOT}" "--gcc-toolchain=$(pwd)/gnu" "-Wl,-rpath=${SYSROOT}/lib64:${SYSROOT}/usr/lib64:$(pwd)/llvm/lib" "-Wl,-dynamic-linker=${SYSROOT}/lib/ld-linux-aarch64.so.1")
+CROSSFLAGS=("--target=aarch64-unknown-linux-gnu" "-march=armv8.2-a" "-mcpu=neoverse-n1" "--sysroot=${SYSROOT}" "--gcc-toolchain=$(pwd)/gnu" "-Wl,-rpath=${SYSROOT}/lib64:${SYSROOT}/usr/lib64:$(pwd)/llvm/lib" "-Wl,-dynamic-linker=${SYSROOT}/lib/ld-linux-aarch64.so.1")
+###
+URL="https://github.com/llvm/llvm-project/archive/refs/tags/llvmorg-${LLVMV}.tar.gz"; F="$(basename "${URL}")"
+if [ ! -f "${F}" ] && [[ "${URL}" = "http"* ]]; then if ! wget --quiet "${URL}" -O "${F}"; then echo "ERR: download failed for ${URL}"; exit 1; fi; fi
+[ ! -d llvmomp ] && mkdir llvmomp && tar xzf "${F}" -C llvmomp --strip-components 1
+cd llvmomp/openmp
+rm -rf build; mkdir build; cd build
+cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_ASM_FLAGS="${CROSSFLAGS}" -DCMAKE_C_FLAGS="${CROSSFLAGS}" -DCMAKE_CXX_FLAGS="${CROSSFLAGS}" \
+  -DLIBOMP_ARCH=aarch64 -DLIBOMP_OMPD_SUPPORT:BOOL=OFF \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=../../../llvm/ \
+  -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON -DCMAKE_VERBOSE_BUILD:BOOL=ON ..
+make -j install
+cd ../../../
 ```
 
 # Build destructor (run after app's main) to dump /proc/self/maps
